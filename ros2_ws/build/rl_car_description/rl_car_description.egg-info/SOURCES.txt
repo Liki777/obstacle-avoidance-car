@@ -1,0 +1,17 @@
+depth_camera.xacro
+gazebo_control.xacro
+inertial_macros.xacro
+lidar.xacro
+package.xml
+robot.urdf
+robot.urdf.xacro
+robot_core.xacro
+setup.cfg
+setup.py
+resource/rl_car_description
+rl_car_description.egg-info/PKG-INFO
+rl_car_description.egg-info/SOURCES.txt
+rl_car_description.egg-info/dependency_links.txt
+rl_car_description.egg-info/requires.txt
+rl_car_description.egg-info/top_level.txt
+rl_car_description.egg-info/zip-safe
