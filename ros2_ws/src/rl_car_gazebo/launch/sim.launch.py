@@ -10,6 +10,8 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
     world = LaunchConfiguration("world")
     use_sim_time = LaunchConfiguration("use_sim_time")
+    gui = LaunchConfiguration("gui")
+    server = LaunchConfiguration("server")
     x = LaunchConfiguration("x")
     y = LaunchConfiguration("y")
     z = LaunchConfiguration("z")
@@ -24,7 +26,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([FindPackageShare("gazebo_ros"), "launch", "gazebo.launch.py"])
         ),
-        launch_arguments={"world": world_path}.items(),
+        launch_arguments={"world": world_path, "gui": gui, "server": server}.items(),
     )
 
     robot_description = ParameterValue(Command(["cat ", robot_urdf]), value_type=str)
@@ -46,6 +48,8 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("world", default_value="maze.world"),
             DeclareLaunchArgument("use_sim_time", default_value="true"),
+            DeclareLaunchArgument("gui", default_value="true", description='Set to "false" to run headless.'),
+            DeclareLaunchArgument("server", default_value="true", description='Set to "false" not to run gzserver.'),
             DeclareLaunchArgument("x", default_value="0.0"),
             DeclareLaunchArgument("y", default_value="0.0"),
             DeclareLaunchArgument("z", default_value="0.1"),
