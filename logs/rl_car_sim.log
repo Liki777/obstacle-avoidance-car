@@ -1,0 +1,35 @@
+[INFO] [launch]: All log files can be found below /home/liki777/.ros/log/2026-03-22-19-04-34-255240-LAPTOP-UI1FG0H1-3443
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [gzserver-1]: process started with pid [3470]
+[INFO] [gzclient-2]: process started with pid [3472]
+[INFO] [robot_state_publisher-3]: process started with pid [3474]
+[INFO] [spawn_entity.py-4]: process started with pid [3476]
+[robot_state_publisher-3] [WARN] [1774177475.125234995] [kdl_parser]: The root link base_link has an inertia specified in the URDF, but KDL does not support a root link with an inertia.  As a workaround, you can add an extra dummy link to your URDF.
+[robot_state_publisher-3] [INFO] [1774177475.125308261] [robot_state_publisher]: got segment base_footprint
+[robot_state_publisher-3] [INFO] [1774177475.125346863] [robot_state_publisher]: got segment base_link
+[robot_state_publisher-3] [INFO] [1774177475.125352235] [robot_state_publisher]: got segment camera_link
+[robot_state_publisher-3] [INFO] [1774177475.125354795] [robot_state_publisher]: got segment camera_link_optical
+[robot_state_publisher-3] [INFO] [1774177475.125357101] [robot_state_publisher]: got segment caster_wheel
+[robot_state_publisher-3] [INFO] [1774177475.125359268] [robot_state_publisher]: got segment chassis
+[robot_state_publisher-3] [INFO] [1774177475.125361423] [robot_state_publisher]: got segment laser_frame
+[robot_state_publisher-3] [INFO] [1774177475.125363540] [robot_state_publisher]: got segment left_wheel
+[robot_state_publisher-3] [INFO] [1774177475.125365644] [robot_state_publisher]: got segment right_wheel
+[spawn_entity.py-4] [INFO] [1774177475.389950210] [spawn_entity]: Spawn Entity started
+[spawn_entity.py-4] [INFO] [1774177475.390181621] [spawn_entity]: Loading entity published on topic robot_description
+[spawn_entity.py-4] [INFO] [1774177475.391314542] [spawn_entity]: Waiting for entity xml on robot_description
+[spawn_entity.py-4] [INFO] [1774177475.729495184] [spawn_entity]: Waiting for service /spawn_entity, timeout = 30
+[spawn_entity.py-4] [INFO] [1774177475.729726416] [spawn_entity]: Waiting for service /spawn_entity
+[spawn_entity.py-4] [INFO] [1774177477.994311983] [spawn_entity]: Calling service /spawn_entity
+[gzserver-1] [INFO] [1774177478.698058149] [depth_cam.camera_controller]: Publishing camera info to [/depth_cam/camera/camera_info]
+[gzserver-1] [INFO] [1774177478.698916999] [depth_cam.camera_controller]: Publishing depth camera info to [/depth_cam/camera/depth/camera_info]
+[gzserver-1] [INFO] [1774177478.699327621] [depth_cam.camera_controller]: Publishing pointcloud to [/depth_cam/camera/points]
+[spawn_entity.py-4] [INFO] [1774177478.705816762] [spawn_entity]: Spawn status: SpawnEntity: Successfully spawned entity [rl_car]
+[gzserver-1] [WARN] [1774177478.708977225] [rcl]: Found remap rule '~/out:=scan'. This syntax is deprecated. Use '--ros-args --remap ~/out:=scan' instead.
+[gzserver-1] [WARN] [1774177478.712433060] [rcl]: Found remap rule '~/out:=scan'. This syntax is deprecated. Use '--ros-args --remap ~/out:=scan' instead.
+[gzserver-1] [INFO] [1774177478.818164228] [diff_drive]: Wheel pair 1 separation set to [0.297000m]
+[gzserver-1] [INFO] [1774177478.818234493] [diff_drive]: Wheel pair 1 diameter set to [0.066000m]
+[gzserver-1] [INFO] [1774177478.819497781] [diff_drive]: Subscribed to [/cmd_vel]
+[gzserver-1] [INFO] [1774177478.821536024] [diff_drive]: Advertise odometry on [/odom]
+[gzserver-1] [INFO] [1774177478.823894430] [diff_drive]: Publishing odom transforms between [odom] and [base_link]
+[gzserver-1] [INFO] [1774177478.823934270] [diff_drive]: Publishing wheel transforms between [base_link], [left_wheel_joint] and [right_wheel_joint]
+[INFO] [spawn_entity.py-4]: process has finished cleanly [pid 3476]
