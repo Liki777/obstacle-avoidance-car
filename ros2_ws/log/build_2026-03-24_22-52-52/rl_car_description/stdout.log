@@ -1,0 +1,25 @@
+running develop
+Removing /home/liki777/graduation_project/ros2_ws/install/rl_car_description/lib/python3.10/site-packages/rl-car-description.egg-link (link to .)
+running egg_info
+writing ../../build/rl_car_description/rl_car_description.egg-info/PKG-INFO
+writing dependency_links to ../../build/rl_car_description/rl_car_description.egg-info/dependency_links.txt
+writing requirements to ../../build/rl_car_description/rl_car_description.egg-info/requires.txt
+writing top-level names to ../../build/rl_car_description/rl_car_description.egg-info/top_level.txt
+reading manifest file '../../build/rl_car_description/rl_car_description.egg-info/SOURCES.txt'
+writing manifest file '../../build/rl_car_description/rl_car_description.egg-info/SOURCES.txt'
+running build
+running install
+running install_data
+copying resource/rl_car_description -> /home/liki777/graduation_project/ros2_ws/install/rl_car_description/share/ament_index/resource_index/packages
+copying package.xml -> /home/liki777/graduation_project/ros2_ws/install/rl_car_description/share/rl_car_description
+copying robot.urdf -> /home/liki777/graduation_project/ros2_ws/install/rl_car_description/share/rl_car_description
+copying robot.urdf.xacro -> /home/liki777/graduation_project/ros2_ws/install/rl_car_description/share/rl_car_description
+copying robot_core.xacro -> /home/liki777/graduation_project/ros2_ws/install/rl_car_description/share/rl_car_description
+copying gazebo_control.xacro -> /home/liki777/graduation_project/ros2_ws/install/rl_car_description/share/rl_car_description
+copying lidar.xacro -> /home/liki777/graduation_project/ros2_ws/install/rl_car_description/share/rl_car_description
+copying depth_camera.xacro -> /home/liki777/graduation_project/ros2_ws/install/rl_car_description/share/rl_car_description
+copying inertial_macros.xacro -> /home/liki777/graduation_project/ros2_ws/install/rl_car_description/share/rl_car_description
+running install_egg_info
+Copying ../../build/rl_car_description/rl_car_description.egg-info to /home/liki777/graduation_project/ros2_ws/install/rl_car_description/lib/python3.10/site-packages/rl_car_description-0.0.1-py3.10.egg-info
+running install_scripts
+writing list of installed files to '/home/liki777/graduation_project/ros2_ws/build/rl_car_description/install.log'

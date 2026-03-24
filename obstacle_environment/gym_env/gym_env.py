@@ -73,10 +73,27 @@ class GazeboEnvConfig:
     max_episode_steps: int = 500
     done_on_collision: bool = True
     done_on_goal: bool = True
+    done_on_out_of_bounds: bool = True
+    # 基于 maze.world 的训练边界（单位：m，world 坐标）
+    map_x_min: float = -2.8
+    map_x_max: float = 2.8
+    map_y_min: float = -2.8
+    map_y_max: float = 2.8
 
     # Gazebo 重置（``gazebo_msgs/SetModelState``）
     model_name: str = "rl_car"
-    set_model_state_service: str = "/set_model_state"
+    # 不同发行版/启动方式下服务名可能不同；按顺序尝试，并在等待期间 spin 以发现服务
+    set_model_state_services: tuple[str, ...] = (
+        "/set_model_state",
+        "/gazebo/set_model_state",
+    )
+    set_entity_state_services: tuple[str, ...] = (
+        "/set_entity_state",
+        "/gazebo/set_entity_state",
+    )
+    set_model_state_wait_sec: float = 2.0
+    """为「每个候选服务名」分配的最大等待时间（秒）；多候选时会依次尝试。"""
+    reset_world_service: str = "/reset_world"
     spawn_x: float = 0.0
     spawn_y: float = 0.0
     spawn_z: float = 0.1
@@ -217,17 +234,29 @@ class RlCarGazeboEnv:
         self._step_idx = 0
         self._goal_reached_for_bonus = False
 
-        self._set_model_client = None
+        self._set_model_client: Any = None
+        self._set_entity_client: Any = None
+        self._reset_world_client: Any = None
+        self._gazebo_msgs_ok = False
+        self._set_model_resolve_warned = False
+        self._disable_set_model_resolution = False
+        self._disable_set_entity_resolution = False
         try:
-            from gazebo_msgs.srv import SetModelState  # type: ignore[import-untyped]
+            from gazebo_msgs.srv import SetModelState  # type: ignore[import-untyped]  # noqa: F401
 
-            self._set_model_client = self._node.create_client(
-                SetModelState, self.env_cfg.set_model_state_service
-            )
+            self._gazebo_msgs_ok = True
         except ImportError as e:
             self._node.get_logger().warn(
                 f"未找到 gazebo_msgs，将无法重置模型位姿: {e}。请安装 ros-humble-gazebo-msgs 并在 Gazebo 中运行。"
             )
+        try:
+            from std_srvs.srv import Empty  # type: ignore[import-untyped]
+
+            self._reset_world_client = self._node.create_client(
+                Empty, self.env_cfg.reset_world_service
+            )
+        except Exception:
+            self._reset_world_client = None
 
     def _pump(self, n: int = 15, timeout_sec: float = 0.02) -> None:
         for _ in range(n):
@@ -242,18 +271,135 @@ class RlCarGazeboEnv:
             time.sleep(0.02)
         raise TimeoutError("等待 /scan /odom /goal_pose 超时，请检查仿真是否已启动。")
 
+    def _discover_set_model_state_service_names(self) -> list[str]:
+        """从当前图中查找类型为 gazebo_msgs/srv/SetModelState 的服务名（含命名空间）。"""
+        target = "gazebo_msgs/srv/SetModelState"
+        found: list[str] = []
+        try:
+            for name, types in self._node.get_service_names_and_types():
+                if target in types:
+                    found.append(name)
+        except Exception:
+            pass
+        return sorted(found)
+
+    def _discover_set_entity_state_service_names(self) -> list[str]:
+        """从当前图中查找类型为 gazebo_msgs/srv/SetEntityState 的服务名。"""
+        target = "gazebo_msgs/srv/SetEntityState"
+        found: list[str] = []
+        try:
+            for name, types in self._node.get_service_names_and_types():
+                if target in types:
+                    found.append(name)
+        except Exception:
+            pass
+        return sorted(found)
+
+    def _resolve_set_model_client(self) -> bool:
+        """懒连接：边 spin 边等；先 ROS2 图自动发现 SetModelState，再试配置里的候选名。"""
+        if self._disable_set_model_resolution:
+            return False
+        if self._set_model_client is not None:
+            return True
+        if not self._gazebo_msgs_ok:
+            return False
+        try:
+            from gazebo_msgs.srv import SetModelState  # type: ignore[import-untyped]
+        except ImportError:
+            return False
+
+        # 先 pump，便于 get_service_names_and_types 与 service_is_ready 更新
+        self._pump(20, 0.02)
+        discovered = self._discover_set_model_state_service_names()
+        # 去重且保持顺序：自动发现优先，其次配置文件中的固定名
+        seen: set[str] = set()
+        candidates: list[str] = []
+        for s in discovered + list(self.env_cfg.set_model_state_services):
+            if s not in seen:
+                seen.add(s)
+                candidates.append(s)
+
+        if len(discovered) == 0:
+            # 图中完全没有该类型服务：当前运行通常不支持，直接禁用后续重复探测
+            self._disable_set_model_resolution = True
+            return False
+
+        wait_each = float(self.env_cfg.set_model_state_wait_sec)
+        for svc in candidates:
+            cli = self._node.create_client(SetModelState, svc)
+            t0 = time.time()
+            while time.time() - t0 < wait_each:
+                if cli.service_is_ready():
+                    self._set_model_client = cli
+                    self._node.get_logger().info(f"已连接 Gazebo 服务: {svc}（SetModelState）")
+                    return True
+                self._pump(15, 0.02)
+            try:
+                self._node.destroy_client(cli)
+            except Exception:
+                pass
+
+        if not self._set_model_resolve_warned:
+            self._set_model_resolve_warned = True
+            self._node.get_logger().warn(
+                "未发现类型为 gazebo_msgs/srv/SetModelState 的服务（已尝试自动发现 + "
+                f"{list(self.env_cfg.set_model_state_services)}）。"
+                " 若只有 /get_model_list：请执行 `ros2 service list | grep -i set` 或 `ros2 service list | grep gazebo`，"
+                " 确认 gzserver 是否提供 SetModelState；Classic 下需 gazebo_ros 正常加载。"
+                " 将跳过位姿重置（小车从当前位置继续训练）。"
+            )
+        self._disable_set_model_resolution = True
+        return False
+
+    def _resolve_set_entity_client(self) -> bool:
+        if self._disable_set_entity_resolution:
+            return False
+        if self._set_entity_client is not None:
+            return True
+        if not self._gazebo_msgs_ok:
+            return False
+        try:
+            from gazebo_msgs.srv import SetEntityState  # type: ignore[import-untyped]
+        except ImportError:
+            return False
+
+        self._pump(20, 0.02)
+        discovered = self._discover_set_entity_state_service_names()
+        seen: set[str] = set()
+        candidates: list[str] = []
+        for s in discovered + list(self.env_cfg.set_entity_state_services):
+            if s not in seen:
+                seen.add(s)
+                candidates.append(s)
+
+        if len(discovered) == 0:
+            self._disable_set_entity_resolution = True
+            return False
+
+        wait_each = float(self.env_cfg.set_model_state_wait_sec)
+        for svc in candidates:
+            cli = self._node.create_client(SetEntityState, svc)
+            t0 = time.time()
+            while time.time() - t0 < wait_each:
+                if cli.service_is_ready():
+                    self._set_entity_client = cli
+                    self._node.get_logger().info(f"已连接 Gazebo 服务: {svc}（SetEntityState）")
+                    return True
+                self._pump(15, 0.02)
+            try:
+                self._node.destroy_client(cli)
+            except Exception:
+                pass
+        self._disable_set_entity_resolution = True
+        return False
+
     def _call_set_model_state(self) -> bool:
-        if self._set_model_client is None:
-            self._node.get_logger().warn("SetModelState 客户端不可用，跳过位姿重置。")
+        if not self._resolve_set_model_client():
             return False
         try:
             from gazebo_msgs.msg import ModelState  # type: ignore[import-untyped]
             from gazebo_msgs.srv import SetModelState  # type: ignore[import-untyped]
         except ImportError:
-            return False
-
-        if not self._set_model_client.wait_for_service(timeout_sec=2.0):
-            self._node.get_logger().warn("服务 /set_model_state 不可用，跳过位姿重置。")
             return False
 
         ms = ModelState()
@@ -279,6 +425,38 @@ class RlCarGazeboEnv:
             return False
         return True
 
+    def _call_set_entity_state(self) -> bool:
+        if not self._resolve_set_entity_client():
+            return False
+        try:
+            from gazebo_msgs.msg import EntityState  # type: ignore[import-untyped]
+            from gazebo_msgs.srv import SetEntityState  # type: ignore[import-untyped]
+        except ImportError:
+            return False
+
+        st = EntityState()
+        st.name = self.env_cfg.model_name
+        st.pose.position.x = float(self.env_cfg.spawn_x)
+        st.pose.position.y = float(self.env_cfg.spawn_y)
+        st.pose.position.z = float(self.env_cfg.spawn_z)
+        st.pose.orientation = _yaw_to_quat(float(self.env_cfg.spawn_yaw))
+        st.twist = Twist()
+        st.reference_frame = "world"
+
+        req = SetEntityState.Request()
+        req.state = st
+        fut = self._set_entity_client.call_async(req)
+        rclpy.spin_until_future_complete(self._node, fut, timeout_sec=5.0)
+        res = fut.result()
+        if res is None:
+            return False
+        if hasattr(res, "success") and not res.success:
+            self._node.get_logger().warn(
+                f"SetEntityState 失败: {getattr(res, 'status_message', '')}"
+            )
+            return False
+        return True
+
     def _sample_goal_xy(self) -> tuple[float, float]:
         r = self.env_cfg.goal_sample_range
         if r is None:
@@ -288,10 +466,50 @@ class RlCarGazeboEnv:
         gy = float(np.random.uniform(min(y0, y1), max(y0, y1)))
         return gx, gy
 
+    @staticmethod
+    def _extract_position_xy_from_obs(obs: dict[str, Any]) -> tuple[float, float] | None:
+        odom = obs.get("odom")
+        if odom is None:
+            return None
+        try:
+            p = odom.pose.pose.position
+            return float(p.x), float(p.y)
+        except Exception:
+            return None
+
+    def _is_out_of_bounds(self, pos_xy: tuple[float, float] | None) -> bool:
+        if pos_xy is None:
+            return False
+        x, y = pos_xy
+        return (
+            x < float(self.env_cfg.map_x_min)
+            or x > float(self.env_cfg.map_x_max)
+            or y < float(self.env_cfg.map_y_min)
+            or y > float(self.env_cfg.map_y_max)
+        )
+
     def reset(self) -> np.ndarray:
         """停车、重置位姿与目标、清空轨迹变量，返回初始 ``state`` 向量。"""
         self._node.stop_robot()
-        self._call_set_model_state()
+        # 优先 set_model_state；失败时退化到 /reset_world，避免一直从错误姿态继续跑飞
+        ok = self._call_set_model_state()
+        if not ok:
+            ok = self._call_set_entity_state()
+        if (not ok) and (self._reset_world_client is not None):
+            try:
+                from std_srvs.srv import Empty  # type: ignore[import-untyped]
+
+                if self._reset_world_client.wait_for_service(timeout_sec=2.0):
+                    fut = self._reset_world_client.call_async(Empty.Request())
+                    rclpy.spin_until_future_complete(self._node, fut, timeout_sec=3.0)
+                    ok = True
+            except Exception:
+                pass
+        if (not ok) and (not self._set_model_resolve_warned):
+            self._set_model_resolve_warned = True
+            self._node.get_logger().warn(
+                "未发现 set_model_state/set_entity_state，且 /reset_world 不可用；重置将仅发布零速度并继续。"
+            )
 
         gx, gy = self._sample_goal_xy()
         self._node.publish_goal(gx, gy)
@@ -340,10 +558,14 @@ class RlCarGazeboEnv:
         self._step_idx += 1
 
         dmin = lidar_min_range(lidar_ranges)
+        pos_xy = self._extract_position_xy_from_obs(obs)
+        out_of_bounds = self._is_out_of_bounds(pos_xy)
         terminated = False
         if self.env_cfg.done_on_collision and dmin <= rcfg.collision_distance:
             terminated = True
         if self.env_cfg.done_on_goal and gd <= rcfg.goal_reached_distance:
+            terminated = True
+        if self.env_cfg.done_on_out_of_bounds and out_of_bounds:
             terminated = True
 
         truncated = self._step_idx >= self.env_cfg.max_episode_steps
@@ -355,6 +577,8 @@ class RlCarGazeboEnv:
             "truncated": truncated,
             "lidar_min_m": dmin,
             "goal_distance": gd,
+            "position_xy": pos_xy,
+            "out_of_bounds": out_of_bounds,
         }
         return state, float(rb.total), done, info
 

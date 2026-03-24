@@ -1,1 +1,9 @@
-/home/liki777/graduation_project/ros2_ws/build/rl_car_description/robot.urdf.xacro
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro"  name="robot">
+
+    <xacro:include filename="robot_core.xacro" />
+    <xacro:include filename="gazebo_control.xacro" />
+    <xacro:include filename="lidar.xacro" />
+    <xacro:include filename="depth_camera.xacro" />
+
+</robot>

@@ -111,27 +111,41 @@ reset
 
 阶段 3：填充强化学习算法（rl_algorithms）
 
-common
+已实现（见仓库 `rl_algorithms/`）：
 
-工具类：buffer, normalization, utils
+- `rl_algorithms/ppo/`：`ActorCritic`（MLP）、`PPOTrainer`（GAE + clip）
+- `rl_algorithms/envs/mock_car_env.py`：与 `state_dim=18` 一致的玩具环境，**无 ROS 可跑通训练**
+- `rl_algorithms/train_ppo.py`：命令行训练入口
 
-ppo
+**依赖**：`pip install -r requirements.txt`（建议项目内 venv：`python3 -m venv .venv && source .venv/bin/activate`）
 
-Actor-Critic网络
+**一键脚本（推荐）**：默认 **启动带窗口的 Gazebo** 再训练，便于观察小车；超参数在 `scripts/train_ppo_launch.sh` 顶部修改。
 
-loss函数
+```bash
+cd graduation_project
+./scripts/train_ppo_launch.sh
+```
 
-update策略
+- 仿真日志：`logs/ppo_gazebo_train_sim.log`
+- 已有仿真在跑时：在脚本里设 `START_GAZEBO=0`
+- 无显示器时：`GAZEBO_GUI=false`
+- 仅离线测试：`MODE=mock`
 
-trainer
+**冒烟训练（Mock，命令行直调）**：
 
-创建训练循环：
+```bash
+cd graduation_project
+python -m rl_algorithms.train_ppo --mock --total-updates 50 --rollout-steps 512
+# 权重默认保存到 checkpoints/ppo_car.pt
+```
 
-state → PPO → action → env.step() → reward → update → next_state
+**Gazebo 训练**（需已 `ros2 launch rl_car_gazebo sim.launch.py` 并 `source ros2_ws/install/setup.bash`）：
 
-保存模型到 models/
+```bash
+python -m rl_algorithms.train_ppo --gazebo --total-updates 20 --rollout-steps 256
+```
 
-日志写到 logs/
+说明：仿真步较慢时可减小 `--rollout-steps` 与 `--total-updates` 先验证链路。
 
 阶段 4：实验与评估
 

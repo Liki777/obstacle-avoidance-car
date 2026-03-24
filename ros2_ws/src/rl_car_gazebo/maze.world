@@ -1,6 +1,8 @@
 
 <sdf version='1.7'>
   <world name='default'>
+      <!-- ========== 添加这行 ========== -->
+
     <light name='sun' type='directional'>
       <cast_shadows>1</cast_shadows>
       <pose>0 0 10 0 -0 0</pose>
@@ -940,5 +942,6 @@
         <projection_type>perspective</projection_type>
       </camera>
     </gui>
+
   </world>
 </sdf>
