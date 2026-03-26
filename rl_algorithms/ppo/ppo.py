@@ -51,6 +51,7 @@ class PPOTrainer:
 
         self.net = ActorCritic(obs_dim, act_dim, hidden_dim=hidden_dim).to(self.device)
         self.opt = optim.Adam(self.net.parameters(), lr=self.cfg.lr, eps=1e-5)
+        self.global_update: int = 0
 
     def _compute_gae(
         self,
@@ -177,8 +178,36 @@ class PPOTrainer:
         return stats
 
     def save(self, path: str) -> None:
-        torch.save({"net": self.net.state_dict(), "obs_dim": self.obs_dim, "act_dim": self.act_dim}, path)
+        torch.save(
+            {
+                "net": self.net.state_dict(),
+                "opt": self.opt.state_dict(),
+                "obs_dim": self.obs_dim,
+                "act_dim": self.act_dim,
+                "global_update": int(self.global_update),
+                "cfg": {
+                    "gamma": float(self.cfg.gamma),
+                    "gae_lambda": float(self.cfg.gae_lambda),
+                    "clip_coef": float(self.cfg.clip_coef),
+                    "value_coef": float(self.cfg.value_coef),
+                    "entropy_coef": float(self.cfg.entropy_coef),
+                    "max_grad_norm": float(self.cfg.max_grad_norm),
+                    "lr": float(self.cfg.lr),
+                    "num_epochs": int(self.cfg.num_epochs),
+                    "minibatch_size": int(self.cfg.minibatch_size),
+                    "rollout_steps": int(self.cfg.rollout_steps),
+                },
+            },
+            path,
+        )
 
     def load(self, path: str) -> None:
         ckpt = torch.load(path, map_location=self.device)
         self.net.load_state_dict(ckpt["net"])
+        if "opt" in ckpt:
+            try:
+                self.opt.load_state_dict(ckpt["opt"])
+            except Exception:
+                # 允许只加载网络参数（例如你改了 optimizer 超参）
+                pass
+        self.global_update = int(ckpt.get("global_update", 0))

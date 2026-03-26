@@ -10,47 +10,48 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class RewardConfig:
     """
-    reward ≈ w_forward * r_fwd
-           - w_collision * r_coll
-           - w_obstacle * r_near
-           + w_goal * r_goal
+    最终版奖励范式（PPO 稳定收敛模板）：
 
-    各子项内部已做尺度归一或裁剪，权重用于总调参。
+    R =
+      + k_progress * (prev_goal_distance - goal_distance)            # 允许负值（远离目标惩罚）
+      + k_safe     * safe_distance(min_lidar)                        # 连续梯度鼓励远离障碍
+      - k_risk     * (|v| / min_lidar)                               # 高速贴近障碍强惩罚
+      - k_turn     * |w|                                             # 抑制原地转圈
+      - k_stop     * 1[v < v_min]                                    # 防止躺平不动
+      - k_smooth   * ||a_t - a_{t-1}||_1                             # 防抖
+
+    终止项（由 env 触发）：
+      collision -> -collision_penalty
+      success   -> +success_reward
+      out_of_bounds -> -out_of_bounds_penalty
     """
 
-    # --- 前进奖励：鼓励沿车体前向 (linear.x) 运动 ---
-    w_forward: float = 0.5
-    """前进项总权重。"""
-    forward_v_ref: float = 1.0
-    """参考最大前向速度 (m/s)，用于把 v 归一化到约 [0,1]。"""
+    # ---- 连续项权重（推荐默认）----
+    k_progress: float = 0.5
+    k_direction: float = 0.6
+    k_velocity_direction: float = 0.6
+    k_safe: float = 0.5
+    k_risk: float = 0.3
+    k_turn: float = 0.05
+    k_stop: float = 0.1
+    k_smooth: float = 0.01
 
-    # --- 碰撞惩罚：激光最小距离低于阈值视为碰撞 ---
-    w_collision: float = 10.0
+    # ---- 距离与阈值（m）----
     collision_distance: float = 0.18
-    """小于等于该距离 (m) 视为碰撞，施加碰撞惩罚。"""
+    safe_distance: float = 0.55
 
-    # --- 靠近障碍惩罚：在 (collision_distance, obstacle_safe_distance] 区间内连续惩罚 ---
-    w_obstacle: float = 1.0
-    obstacle_safe_distance: float = 0.55
-    """大于该距离认为不受「近障」惩罚；需大于 collision_distance。"""
+    # ---- 动作/速度阈值 ----
+    v_min: float = 0.05
+    risk_eps: float = 0.05
 
-    # --- 接近目标奖励 ---
-    w_goal: float = 2.0
-    goal_progress_mode: str = "delta"
-    """
-    - "delta": 需要上一时刻 goal_distance，奖励为 (prev - curr) 的正值部分（密集引导）
-    - "potential": 使用 -goal_distance / goal_distance_ref 的势函数（单步即可）
-    """
-    goal_distance_ref: float = 10.0
-    """potential 模式下的尺度 (m)。"""
-
+    # ---- 终止奖励 ----
     goal_reached_distance: float = 0.35
-    """到达判定距离 (m)，可用于外部 done；本模块可给额外成功奖励。"""
-    w_goal_success: float = 50.0
-    """首次进入 goal_reached_distance 内的一次性奖励（可选，由 compute 参数开启）。"""
+    success_reward: float = 100.0
+    collision_penalty: float = 100.0
+    out_of_bounds_penalty: float = 50.0
 
     def __post_init__(self) -> None:
-        if self.collision_distance >= self.obstacle_safe_distance:
-            raise ValueError("collision_distance 必须小于 obstacle_safe_distance")
-        if self.goal_progress_mode not in ("delta", "potential"):
-            raise ValueError('goal_progress_mode 必须是 "delta" 或 "potential"')
+        if self.collision_distance >= self.safe_distance:
+            raise ValueError("collision_distance 必须小于 safe_distance")
+        if self.risk_eps <= 0:
+            raise ValueError("risk_eps 必须 > 0")

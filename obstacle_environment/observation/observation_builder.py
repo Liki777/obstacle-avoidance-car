@@ -35,6 +35,7 @@ def build_observation(
     _op = OdomProcessor()
     velocity = float(_op.process_velocity(odom_data))
     linear_x = float(_op.process_linear_x(odom_data))
+    angular_z = float(_op.process_angular_z(odom_data))
 
     # Goal -> (goal_distance, goal_angle)
     goal_distance, goal_angle = GoalProcessor().process(odom_data, goal_data)
@@ -56,6 +57,7 @@ def build_observation(
         "lidar": lidar_feat,
         "velocity": velocity,
         "linear_x": linear_x,
+        "angular_z": angular_z,
         "goal_distance": float(goal_distance),
         "goal_angle": float(goal_angle),
         "camera": camera_feat,  # 前期为 (0,) 或 zeros

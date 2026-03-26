@@ -68,6 +68,8 @@ TOTAL_UPDATES=50
 ROLLOUT_STEPS=64
 SAVE_PATH="checkpoints/ppo_car.pt"
 DEVICE="cpu"
+# 每步日志（action + 观测 + reward 分项）
+STEP_LOG_CSV="logs/ppo_steps.csv"
 
 # ---------- PPO 超参数 ----------
 GAMMA="0.99"
@@ -88,13 +90,16 @@ MAX_EPISODE_STEPS=256
 
 # ---------- maze 地图边界与重置点（防止跑出地图）----------
 # 说明：超出边界会在 env.step() 中直接 done，并触发 reset
-MAP_X_MIN="-2.8"
-MAP_X_MAX="2.8"
-MAP_Y_MIN="-2.8"
-MAP_Y_MAX="2.8"
-SPAWN_X="0.0"
+# maze.world 外墙中心大致为 x∈[0,10], y∈[-1,9]，这里加裕量
+MAP_X_MIN="-0.5"
+MAP_X_MAX="10.5"
+MAP_Y_MIN="-1.5"
+MAP_Y_MAX="9.5"
+# 把出生点放在迷宫内部，并让朝向“指向迷宫内部”，避免一 reset 就朝外冲
+SPAWN_X="1.0"
 SPAWN_Y="0.0"
-SPAWN_YAW="0.0"
+# 如果你观察到“前进反向”（cmd_vel linear.x>0 却往 -x 走），把 yaw 改成 3.14159
+SPAWN_YAW="3.14159"
 GOAL_X="2.0"
 GOAL_Y="2.0"
 
@@ -174,6 +179,10 @@ if [[ "${MODE}" == "gazebo" && "${START_GAZEBO}" == "1" ]]; then
     exec ros2 launch \"${LAUNCH_FILE}\" \
       \"world:=${WORLD}\" \
       \"gui:=${GAZEBO_GUI}\" \
+      \"x:=${SPAWN_X}\" \
+      \"y:=${SPAWN_Y}\" \
+      \"z:=0.1\" \
+      \"yaw:=${SPAWN_YAW}\" \
       >\"${SIM_LOG}\" 2>&1
   " &
   SIM_PID=$!
@@ -303,7 +312,8 @@ python3 -m rl_algorithms.train_ppo \
   --map-x-min "${MAP_X_MIN}" \
   --map-x-max "${MAP_X_MAX}" \
   --map-y-min "${MAP_Y_MIN}" \
-  --map-y-max "${MAP_Y_MAX}"
+  --map-y-max "${MAP_Y_MAX}" \
+  --step-log-csv "${STEP_LOG_CSV}"
 RC=$?
 set -e
 

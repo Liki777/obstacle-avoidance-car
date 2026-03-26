@@ -107,6 +107,25 @@ def extract_pose_xy_yaw(odom_data: Any) -> tuple[Optional[np.ndarray], Optional[
     return None, None
 
 
+def extract_angular_z(odom_data: Any) -> float:
+    """角速度 z (rad/s)，用于奖励的转向惩罚项。"""
+    if odom_data is None:
+        return 0.0
+    if isinstance(odom_data, Mapping):
+        if "angular_z" in odom_data:
+            return float(odom_data["angular_z"])
+        if "angular" in odom_data and isinstance(odom_data["angular"], Mapping):
+            return float(odom_data["angular"].get("z", 0.0))
+        return 0.0
+    if hasattr(odom_data, "twist") and hasattr(odom_data.twist, "twist"):
+        ang = odom_data.twist.twist.angular
+        return float(ang.z)
+    if hasattr(odom_data, "twist") and hasattr(odom_data.twist, "angular"):
+        ang = odom_data.twist.angular
+        return float(ang.z)
+    return 0.0
+
+
 @dataclass
 class OdomProcessor:
     def process_velocity(self, odom_data: Any) -> float:
@@ -114,6 +133,9 @@ class OdomProcessor:
 
     def process_linear_x(self, odom_data: Any) -> float:
         return extract_linear_x(odom_data)
+
+    def process_angular_z(self, odom_data: Any) -> float:
+        return extract_angular_z(odom_data)
 
     def process_pose(self, odom_data: Any) -> tuple[Optional[np.ndarray], Optional[float]]:
         return extract_pose_xy_yaw(odom_data)

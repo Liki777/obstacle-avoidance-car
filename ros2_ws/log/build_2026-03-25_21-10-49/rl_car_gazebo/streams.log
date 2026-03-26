@@ -1,0 +1,34 @@
+[1.096s] Invoking command in '/home/liki777/graduation_project/ros2_ws/build/rl_car_gazebo': AMENT_PREFIX_PATH=/home/liki777/graduation_project/ros2_ws/install/rl_car_description:${AMENT_PREFIX_PATH} PYTHONPATH=/home/liki777/graduation_project/ros2_ws/build/rl_car_gazebo/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/liki777/graduation_project/ros2_ws/install/rl_car_gazebo/lib/python3.10/site-packages:/home/liki777/graduation_project/ros2_ws/install/rl_car_description/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --uninstall --editable --build-directory /home/liki777/graduation_project/ros2_ws/build/rl_car_gazebo/build
+[1.272s] running develop
+[1.379s] Removing /home/liki777/graduation_project/ros2_ws/install/rl_car_gazebo/lib/python3.10/site-packages/rl-car-gazebo.egg-link (link to .)
+[1.399s] Invoked command in '/home/liki777/graduation_project/ros2_ws/build/rl_car_gazebo' returned '0': AMENT_PREFIX_PATH=/home/liki777/graduation_project/ros2_ws/install/rl_car_description:${AMENT_PREFIX_PATH} PYTHONPATH=/home/liki777/graduation_project/ros2_ws/build/rl_car_gazebo/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/liki777/graduation_project/ros2_ws/install/rl_car_gazebo/lib/python3.10/site-packages:/home/liki777/graduation_project/ros2_ws/install/rl_car_description/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --uninstall --editable --build-directory /home/liki777/graduation_project/ros2_ws/build/rl_car_gazebo/build
+[1.401s] Invoking command in '/home/liki777/graduation_project/ros2_ws/src/rl_car_gazebo': AMENT_PREFIX_PATH=/home/liki777/graduation_project/ros2_ws/install/rl_car_description:${AMENT_PREFIX_PATH} PYTHONPATH=/home/liki777/graduation_project/ros2_ws/build/rl_car_gazebo/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/liki777/graduation_project/ros2_ws/install/rl_car_gazebo/lib/python3.10/site-packages:/home/liki777/graduation_project/ros2_ws/install/rl_car_description/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/rl_car_gazebo build --build-base /home/liki777/graduation_project/ros2_ws/build/rl_car_gazebo/build install --record /home/liki777/graduation_project/ros2_ws/build/rl_car_gazebo/install.log --single-version-externally-managed install_data --force
+[1.570s] running egg_info
+[1.570s] writing ../../build/rl_car_gazebo/rl_car_gazebo.egg-info/PKG-INFO
+[1.571s] writing dependency_links to ../../build/rl_car_gazebo/rl_car_gazebo.egg-info/dependency_links.txt
+[1.571s] writing requirements to ../../build/rl_car_gazebo/rl_car_gazebo.egg-info/requires.txt
+[1.571s] writing top-level names to ../../build/rl_car_gazebo/rl_car_gazebo.egg-info/top_level.txt
+[1.572s] reading manifest file '../../build/rl_car_gazebo/rl_car_gazebo.egg-info/SOURCES.txt'
+[1.574s] writing manifest file '../../build/rl_car_gazebo/rl_car_gazebo.egg-info/SOURCES.txt'
+[1.575s] running build
+[1.575s] running build_py
+[1.575s] creating /home/liki777/graduation_project/ros2_ws/build/rl_car_gazebo/build
+[1.575s] creating /home/liki777/graduation_project/ros2_ws/build/rl_car_gazebo/build/lib
+[1.575s] creating /home/liki777/graduation_project/ros2_ws/build/rl_car_gazebo/build/lib/rl_car_gazebo
+[1.576s] copying rl_car_gazebo/__init__.py -> /home/liki777/graduation_project/ros2_ws/build/rl_car_gazebo/build/lib/rl_car_gazebo
+[1.576s] running install
+[1.576s] running install_lib
+[1.577s] creating /home/liki777/graduation_project/ros2_ws/install/rl_car_gazebo/lib/python3.10/site-packages/rl_car_gazebo
+[1.577s] copying /home/liki777/graduation_project/ros2_ws/build/rl_car_gazebo/build/lib/rl_car_gazebo/__init__.py -> /home/liki777/graduation_project/ros2_ws/install/rl_car_gazebo/lib/python3.10/site-packages/rl_car_gazebo
+[1.577s] byte-compiling /home/liki777/graduation_project/ros2_ws/install/rl_car_gazebo/lib/python3.10/site-packages/rl_car_gazebo/__init__.py to __init__.cpython-310.pyc
+[1.578s] running install_data
+[1.578s] copying resource/rl_car_gazebo -> /home/liki777/graduation_project/ros2_ws/install/rl_car_gazebo/share/ament_index/resource_index/packages
+[1.578s] copying package.xml -> /home/liki777/graduation_project/ros2_ws/install/rl_car_gazebo/share/rl_car_gazebo
+[1.580s] copying launch/sim.launch.py -> /home/liki777/graduation_project/ros2_ws/install/rl_car_gazebo/share/rl_car_gazebo/launch
+[1.581s] copying empty.world -> /home/liki777/graduation_project/ros2_ws/install/rl_car_gazebo/share/rl_car_gazebo/worlds
+[1.582s] copying maze.world -> /home/liki777/graduation_project/ros2_ws/install/rl_car_gazebo/share/rl_car_gazebo/worlds
+[1.582s] running install_egg_info
+[1.584s] Copying ../../build/rl_car_gazebo/rl_car_gazebo.egg-info to /home/liki777/graduation_project/ros2_ws/install/rl_car_gazebo/lib/python3.10/site-packages/rl_car_gazebo-0.0.1-py3.10.egg-info
+[1.587s] running install_scripts
+[1.602s] writing list of installed files to '/home/liki777/graduation_project/ros2_ws/build/rl_car_gazebo/install.log'
+[1.620s] Invoked command in '/home/liki777/graduation_project/ros2_ws/src/rl_car_gazebo' returned '0': AMENT_PREFIX_PATH=/home/liki777/graduation_project/ros2_ws/install/rl_car_description:${AMENT_PREFIX_PATH} PYTHONPATH=/home/liki777/graduation_project/ros2_ws/build/rl_car_gazebo/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/liki777/graduation_project/ros2_ws/install/rl_car_gazebo/lib/python3.10/site-packages:/home/liki777/graduation_project/ros2_ws/install/rl_car_description/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/rl_car_gazebo build --build-base /home/liki777/graduation_project/ros2_ws/build/rl_car_gazebo/build install --record /home/liki777/graduation_project/ros2_ws/build/rl_car_gazebo/install.log --single-version-externally-managed install_data --force

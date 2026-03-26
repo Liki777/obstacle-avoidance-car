@@ -36,15 +36,37 @@ def _make_gazebo_env(
     spawn_yaw: float,
     goal_x: float,
     goal_y: float,
+    goal_range_x: str,
+    goal_range_y: str,
+    goal_min_distance: float,
     map_x_min: float,
     map_x_max: float,
     map_y_min: float,
     map_y_max: float,
-):
+    step_log_csv: str | None,
+    reward_profile: str,
+): 
     from obstacle_environment import RobotTaskSpec
     from obstacle_environment.gym_env.gym_env import GazeboEnvConfig, RlCarGazeboEnv
+    from obstacle_environment.reward import RewardConfig
 
-    spec = RobotTaskSpec.preset_diff_drive()
+    if reward_profile == "stage1_walk":
+        # 第一阶段：不引入雷达惩罚（但 state 仍含 lidar），只学“朝目标走 + 稳定控制”
+        r_cfg = RewardConfig(
+            k_safe=0.0,
+            k_risk=0.0,
+            collision_penalty=0.0,  # empty.world 基本不会碰撞，避免终止项干扰
+        )
+    else:
+        r_cfg = RewardConfig()
+
+    spec = RobotTaskSpec.preset_diff_drive(reward_config=r_cfg)
+
+    goal_sample_range = None
+    if goal_range_x and goal_range_y:
+        x0, x1 = [float(s.strip()) for s in goal_range_x.split(",")]
+        y0, y1 = [float(s.strip()) for s in goal_range_y.split(",")]
+        goal_sample_range = ((x0, x1), (y0, y1))
     env_cfg = GazeboEnvConfig(
         control_dt=control_dt,
         max_episode_steps=max_episode_steps,
@@ -53,11 +75,14 @@ def _make_gazebo_env(
         spawn_yaw=spawn_yaw,
         goal_x=goal_x,
         goal_y=goal_y,
+        goal_sample_range=goal_sample_range,
+        goal_min_distance=goal_min_distance,
         map_x_min=map_x_min,
         map_x_max=map_x_max,
         map_y_min=map_y_min,
         map_y_max=map_y_max,
         done_on_out_of_bounds=True,
+        step_log_csv=step_log_csv,
     )
     return RlCarGazeboEnv(spec, env_cfg), spec
 
@@ -70,6 +95,12 @@ def main() -> None:
     ap.add_argument("--rollout-steps", type=int, default=512, help="每轮采集的转移步数")
     ap.add_argument("--device", type=str, default="cpu", help="cpu 或 cuda")
     ap.add_argument("--save", type=str, default=os.path.join(_ROOT, "checkpoints", "ppo_car.pt"))
+    ap.add_argument("--load", type=str, default="", help="若非空，从该 checkpoint 加载并继续训练")
+    ap.add_argument(
+        "--auto-resume",
+        action="store_true",
+        help="若 save 路径已存在且未指定 --load，则自动从 save 加载续训",
+    )
     ap.add_argument("--seed", type=int, default=0)
 
     # ---------- PPO / 网络超参（与 PPOConfig、ActorCritic 一致）----------
@@ -92,10 +123,31 @@ def main() -> None:
     ap.add_argument("--spawn-yaw", type=float, default=0.0)
     ap.add_argument("--goal-x", type=float, default=2.0)
     ap.add_argument("--goal-y", type=float, default=2.0)
-    ap.add_argument("--map-x-min", type=float, default=-2.8)
-    ap.add_argument("--map-x-max", type=float, default=2.8)
-    ap.add_argument("--map-y-min", type=float, default=-2.8)
-    ap.add_argument("--map-y-max", type=float, default=2.8)
+    ap.add_argument(
+        "--goal-range-x",
+        type=str,
+        default="",
+        help="随机目标 x 范围，格式 'x0,x1'；与 --goal-range-y 同时给出才生效",
+    )
+    ap.add_argument(
+        "--goal-range-y",
+        type=str,
+        default="",
+        help="随机目标 y 范围，格式 'y0,y1'；与 --goal-range-x 同时给出才生效",
+    )
+    ap.add_argument("--goal-min-distance", type=float, default=0.8)
+    ap.add_argument("--map-x-min", type=float, default=-0.5)
+    ap.add_argument("--map-x-max", type=float, default=10.5)
+    ap.add_argument("--map-y-min", type=float, default=-1.5)
+    ap.add_argument("--map-y-max", type=float, default=9.5)
+    ap.add_argument("--step-log-csv", type=str, default="", help="若非空，记录每步 action/观测/reward 到该 CSV")
+    ap.add_argument(
+        "--reward-profile",
+        type=str,
+        default="default",
+        choices=["default", "stage1_walk"],
+        help="奖励配置预设：stage1_walk=第一阶段学会走路（无雷达惩罚）",
+    )
 
     args = ap.parse_args()
 
@@ -122,10 +174,15 @@ def main() -> None:
             spawn_yaw=args.spawn_yaw,
             goal_x=args.goal_x,
             goal_y=args.goal_y,
+            goal_range_x=args.goal_range_x,
+            goal_range_y=args.goal_range_y,
+            goal_min_distance=args.goal_min_distance,
             map_x_min=args.map_x_min,
             map_x_max=args.map_x_max,
             map_y_min=args.map_y_min,
             map_y_max=args.map_y_max,
+            step_log_csv=(args.step_log_csv or None),
+            reward_profile=args.reward_profile,
         )
         obs_dim = spec.state_dim
         act_dim = spec.action_dim
@@ -152,6 +209,13 @@ def main() -> None:
     )
 
     os.makedirs(os.path.dirname(args.save) or ".", exist_ok=True)
+    # ---- 断点续训：优先 --load，其次 auto-resume ----
+    load_path = args.load.strip()
+    if (not load_path) and args.auto_resume and os.path.exists(args.save):
+        load_path = args.save
+    if load_path:
+        trainer.load(load_path)
+        print(f"loaded checkpoint: {load_path} (global_update={trainer.global_update})", flush=True)
     t0 = time.time()
     print(
         f"start training | env={'mock' if args.mock else 'gazebo'} "
@@ -159,14 +223,17 @@ def main() -> None:
         f"control_dt={args.control_dt if args.gazebo else 'n/a'}",
         flush=True,
     )
-    for u in range(args.total_updates):
+    start_u = int(trainer.global_update)
+    target_u = start_u + int(args.total_updates)
+    for u in range(start_u, target_u):
         t_u = time.time()
-        print(f"collecting rollout {u+1}/{args.total_updates} ...", flush=True)
+        print(f"collecting rollout {u+1}/{target_u} ...", flush=True)
         batch = trainer.collect_rollout()
-        print(f"updating policy {u+1}/{args.total_updates} ...", flush=True)
+        print(f"updating policy {u+1}/{target_u} ...", flush=True)
         stats = trainer.update(batch)
+        trainer.global_update = int(u + 1)
         print(
-            f"update {u+1}/{args.total_updates} | "
+            f"update {u+1}/{target_u} | "
             f"pol_loss={stats['policy_loss']:.4f} val_loss={stats['value_loss']:.4f} "
             f"H={stats['entropy']:.3f} kl~={stats['approx_kl']:.4f} "
             f"elapsed={time.time()-t_u:.1f}s",

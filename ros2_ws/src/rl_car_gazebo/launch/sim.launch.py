@@ -22,6 +22,7 @@ def generate_launch_description():
     x = LaunchConfiguration("x")
     y = LaunchConfiguration("y")
     z = LaunchConfiguration("z")
+    yaw = LaunchConfiguration("yaw")
 
     pkg_gazebo = FindPackageShare("rl_car_gazebo")
     pkg_desc = FindPackageShare("rl_car_description")
@@ -72,6 +73,7 @@ def generate_launch_description():
             "-topic", "robot_description",
             "-entity", "rl_car",
             "-x", x, "-y", y, "-z", z,
+            "-Y", yaw,
             "-timeout", "30",  # 增加超时时间
         ],
     )
@@ -91,6 +93,7 @@ def generate_launch_description():
             DeclareLaunchArgument("x", default_value="0.0"),
             DeclareLaunchArgument("y", default_value="0.0"),
             DeclareLaunchArgument("z", default_value="0.1"),
+            DeclareLaunchArgument("yaw", default_value="0.0"),
             gzserver,
             gzclient,
             rsp,

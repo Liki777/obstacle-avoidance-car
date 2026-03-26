@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import math
 import time
+import csv
+import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -74,11 +76,12 @@ class GazeboEnvConfig:
     done_on_collision: bool = True
     done_on_goal: bool = True
     done_on_out_of_bounds: bool = True
-    # 基于 maze.world 的训练边界（单位：m，world 坐标）
-    map_x_min: float = -2.8
-    map_x_max: float = 2.8
-    map_y_min: float = -2.8
-    map_y_max: float = 2.8
+    # 基于 maze.world（Maze-Map）外墙中心点推断的训练边界（单位：m，world 坐标）
+    # 墙中心大致落在 x∈[0,10], y∈[-1,9]，这里加一点裕量避免贴墙误判
+    map_x_min: float = -0.5
+    map_x_max: float = 10.5
+    map_y_min: float = -1.5
+    map_y_max: float = 9.5
 
     # Gazebo 重置（``gazebo_msgs/SetModelState``）
     model_name: str = "rl_car"
@@ -105,12 +108,18 @@ class GazeboEnvConfig:
     goal_y: float = 2.0
     goal_sample_range: Optional[tuple[tuple[float, float], tuple[float, float]]] = None
     """例如 ((-1.0, 3.0), (-1.0, 3.0)) 表示 x,y 各自区间。"""
+    goal_min_distance: float = 0.8
+    """若启用 goal_sample_range，采样目标与出生点的最小距离（m），避免目标太近无学习信号。"""
 
     reset_settle_time: float = 0.25
     """重置模型后等待传感器稳定的时间 (s)。"""
 
     give_success_reward: bool = True
     """是否启用到达目标的一次性奖励（见 ``RewardConfig.w_goal_success``）。"""
+
+    # ---- 日志：每一步写入 CSV（包含 action + 观测关键信息 + reward 分项）----
+    step_log_csv: Optional[str] = None
+    """例如 'logs/ppo_steps.csv'。None 表示不记录。"""
 
 
 class _RlCarGymNode(Node):
@@ -233,6 +242,52 @@ class RlCarGazeboEnv:
         self._prev_goal_distance: Optional[float] = None
         self._step_idx = 0
         self._goal_reached_for_bonus = False
+        self._prev_action: Optional[np.ndarray] = None
+        self._episode_idx = 0
+
+        # ---- step 日志（可选）----
+        self._step_log_f = None
+        self._step_log_writer = None
+        if self.env_cfg.step_log_csv:
+            path = self.env_cfg.step_log_csv
+            if not os.path.isabs(path):
+                # 相对路径按当前工作目录解析（通常是项目根）
+                path = os.path.abspath(path)
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            self._step_log_f = open(path, "w", newline="", encoding="utf-8")
+            self._step_log_writer = csv.writer(self._step_log_f)
+            # 头：包含 action、lidar 下采样（obs['lidar']）、关键观测与 reward 分项
+            header = [
+                "t_wall",
+                "episode",
+                "step",
+                "raw_action_0",
+                "raw_action_1",
+                "cmd_linear_x",
+                "cmd_angular_z",
+                "pos_x",
+                "pos_y",
+                "goal_distance",
+                "goal_angle",
+                "linear_x",
+                "angular_z",
+                "lidar_min",
+                "done",
+                "terminated",
+                "truncated",
+                "terminal_reason",
+                # reward breakdown (flatten)
+                "reward_total",
+                "reward_progress",
+                "reward_safe",
+                "reward_risk",
+                "reward_turn",
+                "reward_stop",
+                "reward_smooth",
+                "reward_terminal",
+            ] + [f"lidar_feat_{i}" for i in range(int(self.spec.observation_config.lidar_dim))]
+            self._step_log_writer.writerow(header)
+            self._step_log_f.flush()
 
         self._set_model_client: Any = None
         self._set_entity_client: Any = None
@@ -462,8 +517,14 @@ class RlCarGazeboEnv:
         if r is None:
             return float(self.env_cfg.goal_x), float(self.env_cfg.goal_y)
         (x0, x1), (y0, y1) = r
-        gx = float(np.random.uniform(min(x0, x1), max(x0, x1)))
-        gy = float(np.random.uniform(min(y0, y1), max(y0, y1)))
+        # 采样直到与 spawn 足够远
+        for _ in range(200):
+            gx = float(np.random.uniform(min(x0, x1), max(x0, x1)))
+            gy = float(np.random.uniform(min(y0, y1), max(y0, y1)))
+            dx = gx - float(self.env_cfg.spawn_x)
+            dy = gy - float(self.env_cfg.spawn_y)
+            if float(np.hypot(dx, dy)) >= float(self.env_cfg.goal_min_distance):
+                return gx, gy
         return gx, gy
 
     @staticmethod
@@ -517,6 +578,8 @@ class RlCarGazeboEnv:
         self._prev_goal_distance = None
         self._step_idx = 0
         self._goal_reached_for_bonus = False
+        self._prev_action = None
+        self._episode_idx += 1
 
         time.sleep(self.env_cfg.reset_settle_time)
         self._wait_ready()
@@ -530,7 +593,11 @@ class RlCarGazeboEnv:
         Returns:
             state, reward, done, info
         """
-        cmd = self._mapper.to_linear_angular(action)
+        raw_action = np.asarray(action, dtype=np.float32).reshape(-1)
+        a0 = float(raw_action[0]) if raw_action.size > 0 else 0.0
+        a1 = float(raw_action[1]) if raw_action.size > 1 else 0.0
+
+        cmd = self._mapper.to_linear_angular(raw_action)
         self._node.publish_cmd_vel(float(cmd[0]), float(cmd[1]))
 
         time.sleep(self.env_cfg.control_dt)
@@ -542,31 +609,37 @@ class RlCarGazeboEnv:
         gd = float(obs["goal_distance"])
         rcfg = self.spec.reward_config
 
-        rb = compute_reward(
-            lidar_ranges=lidar_ranges,
-            linear_x=float(obs["linear_x"]),
-            goal_distance=gd,
-            prev_goal_distance=self._prev_goal_distance,
-            config=rcfg,
-            give_success_bonus=self.env_cfg.give_success_reward,
-            was_goal_reached_before=self._goal_reached_for_bonus,
-        )
-        if self.env_cfg.give_success_reward and gd <= rcfg.goal_reached_distance:
-            self._goal_reached_for_bonus = True
-
-        self._prev_goal_distance = gd
-        self._step_idx += 1
-
         dmin = lidar_min_range(lidar_ranges)
         pos_xy = self._extract_position_xy_from_obs(obs)
         out_of_bounds = self._is_out_of_bounds(pos_xy)
         terminated = False
+        terminal_reason: Optional[str] = None
         if self.env_cfg.done_on_collision and dmin <= rcfg.collision_distance:
             terminated = True
-        if self.env_cfg.done_on_goal and gd <= rcfg.goal_reached_distance:
+            terminal_reason = "collision"
+        if (not terminated) and self.env_cfg.done_on_goal and gd <= rcfg.goal_reached_distance:
             terminated = True
-        if self.env_cfg.done_on_out_of_bounds and out_of_bounds:
+            terminal_reason = "success"
+        if (not terminated) and self.env_cfg.done_on_out_of_bounds and out_of_bounds:
             terminated = True
+            terminal_reason = "out_of_bounds"
+
+        rb = compute_reward(
+            lidar_ranges=lidar_ranges,
+            linear_x=float(obs["linear_x"]),
+            angular_z=float(obs.get("angular_z", 0.0)),
+            goal_distance=gd,
+            goal_angle=float(obs.get("goal_angle", 0.0)),
+            prev_goal_distance=self._prev_goal_distance,
+            action=cmd,
+            prev_action=self._prev_action,
+            config=rcfg,
+            terminal=terminal_reason,
+        )
+
+        self._prev_action = cmd.astype(np.float32, copy=False)
+        self._prev_goal_distance = gd
+        self._step_idx += 1
 
         truncated = self._step_idx >= self.env_cfg.max_episode_steps
         done = terminated or truncated
@@ -579,7 +652,59 @@ class RlCarGazeboEnv:
             "goal_distance": gd,
             "position_xy": pos_xy,
             "out_of_bounds": out_of_bounds,
+            "terminal_reason": terminal_reason or "",
         }
+
+        # ---- 写 step 日志（可选）----
+        if self._step_log_writer is not None and self._step_log_f is not None:
+            pos_x = float(pos_xy[0]) if pos_xy is not None else 0.0
+            pos_y = float(pos_xy[1]) if pos_xy is not None else 0.0
+            lidar_feat = obs.get("lidar")
+            if isinstance(lidar_feat, np.ndarray):
+                lf = lidar_feat.reshape(-1).astype(np.float32, copy=False)
+            else:
+                lf = np.zeros((int(self.spec.observation_config.lidar_dim),), dtype=np.float32)
+            lf = lf[: int(self.spec.observation_config.lidar_dim)]
+            if lf.size < int(self.spec.observation_config.lidar_dim):
+                lf = np.pad(lf, (0, int(self.spec.observation_config.lidar_dim) - lf.size))
+
+            rb_dict = rb.as_dict()
+            row = [
+                f"{time.time():.6f}",
+                str(self._episode_idx),
+                str(self._step_idx),
+                f"{a0:.6f}",
+                f"{a1:.6f}",
+                f"{float(cmd[0]):.6f}",
+                f"{float(cmd[1]):.6f}",
+                f"{pos_x:.6f}",
+                f"{pos_y:.6f}",
+                f"{gd:.6f}",
+                f"{float(obs.get('goal_angle', 0.0)):.6f}",
+                f"{float(obs.get('linear_x', 0.0)):.6f}",
+                f"{float(obs.get('angular_z', 0.0)):.6f}",
+                f"{float(dmin):.6f}",
+                "1" if done else "0",
+                "1" if terminated else "0",
+                "1" if truncated else "0",
+                terminal_reason or "",
+                f"{rb_dict.get('reward_total', 0.0):.6f}",
+                f"{rb_dict.get('reward_progress', 0.0):.6f}",
+                f"{rb_dict.get('reward_safe', 0.0):.6f}",
+                f"{rb_dict.get('reward_risk', 0.0):.6f}",
+                f"{rb_dict.get('reward_turn', 0.0):.6f}",
+                f"{rb_dict.get('reward_stop', 0.0):.6f}",
+                f"{rb_dict.get('reward_smooth', 0.0):.6f}",
+                f"{rb_dict.get('reward_terminal', 0.0):.6f}",
+            ] + [f"{float(x):.6f}" for x in lf.tolist()]
+            self._step_log_writer.writerow(row)
+            # 为了可实时观察，定期 flush（每 10 步）
+            if (self._step_idx % 10) == 0:
+                try:
+                    self._step_log_f.flush()
+                except Exception:
+                    pass
+
         return state, float(rb.total), done, info
 
     def render(self) -> None:
@@ -588,6 +713,15 @@ class RlCarGazeboEnv:
 
     def close(self) -> None:
         self._node.stop_robot()
+        if self._step_log_f is not None:
+            try:
+                self._step_log_f.flush()
+            except Exception:
+                pass
+            try:
+                self._step_log_f.close()
+            except Exception:
+                pass
         try:
             self._node.destroy_node()
         except Exception:
