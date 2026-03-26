@@ -22,7 +22,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WS="${ROOT}/ros2_ws"
 ROS_DISTRO="${ROS_DISTRO:-humble}"
 
-WORLD="${WORLD:-empty.world}"
+WORLD="${WORLD:-maze.world}"
 GAZEBO_GUI="${GAZEBO_GUI:-true}"
 
 SPAWN_X="${SPAWN_X:-0.0}"

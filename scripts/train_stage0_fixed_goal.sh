@@ -40,8 +40,8 @@ DEVICE="${DEVICE:-cpu}"
 SEED="${SEED:-0}"
 
 # 固定目标（核心）
-GOAL_X="${GOAL_X:-3.0}"
-GOAL_Y="${GOAL_Y:-0.0}"
+GOAL_X="${GOAL_X:-0.0}"
+GOAL_Y="${GOAL_Y:-3.0}"
 
 # 出生点/朝向
 SPAWN_X="${SPAWN_X:-0.0}"
