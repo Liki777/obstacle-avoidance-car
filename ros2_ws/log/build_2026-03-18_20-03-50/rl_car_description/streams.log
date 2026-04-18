@@ -1,4 +1,0 @@
-[0.015s] Invoking command in '/home/liki777/graduation_project/ros2_ws/build/rl_car_description': /usr/bin/cmake /home/liki777/graduation_project/ros2_ws/src/rl_car_description -DCATKIN_INSTALL_INTO_PREFIX_ROOT=0 -DCATKIN_SYMLINK_INSTALL=ON -DCMAKE_INSTALL_PREFIX=/home/liki777/graduation_project/ros2_ws/install/rl_car_description
-[0.056s] [0mCMake Error: The source directory "/home/liki777/graduation_project/ros2_ws/src/rl_car_description" does not appear to contain CMakeLists.txt.
-[0.056s] Specify --help for usage, or press the help button on the CMake GUI.[0m
-[0.061s] Invoked command in '/home/liki777/graduation_project/ros2_ws/build/rl_car_description' returned '1': /usr/bin/cmake /home/liki777/graduation_project/ros2_ws/src/rl_car_description -DCATKIN_INSTALL_INTO_PREFIX_ROOT=0 -DCATKIN_SYMLINK_INSTALL=ON -DCMAKE_INSTALL_PREFIX=/home/liki777/graduation_project/ros2_ws/install/rl_car_description

@@ -1,0 +1,121 @@
+<?xml version="1.0" ?>
+<!--
+  8m×8m 训练/展示场地（内沿约 x,y ∈ [0,8]）。
+  起点 (1,1)、终点 (7,7)；随机障碍由外部 SpawnEntity 注入（见 demo_random_obstacles.py）。
+-->
+<sdf version="1.6">
+  <world name="arena_8x8">
+    <gravity>0 0 -9.8</gravity>
+    <physics type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+
+    <plugin name="gazebo_ros_state" filename="libgazebo_ros_state.so">
+      <update_rate>50.0</update_rate>
+    </plugin>
+
+    <include>
+      <uri>model://sun</uri>
+    </include>
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <!-- 围墙：内沿约 [0,8]×[0,8]，墙厚 0.12 -->
+    <model name="a8_wall_south">
+      <static>true</static>
+      <pose>4.0 -0.06 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>8.24 0.12 0.7</size></box></geometry></collision>
+        <visual name="v">
+          <geometry><box><size>8.24 0.12 0.7</size></box></geometry>
+          <material>
+            <ambient>0.22 0.22 0.24 1</ambient>
+            <diffuse>0.35 0.35 0.38 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <model name="a8_wall_north">
+      <static>true</static>
+      <pose>4.0 8.06 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>8.24 0.12 0.7</size></box></geometry></collision>
+        <visual name="v">
+          <geometry><box><size>8.24 0.12 0.7</size></box></geometry>
+          <material>
+            <ambient>0.22 0.22 0.24 1</ambient>
+            <diffuse>0.35 0.35 0.38 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <model name="a8_wall_west">
+      <static>true</static>
+      <pose>-0.06 4.0 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.12 8.24 0.7</size></box></geometry></collision>
+        <visual name="v">
+          <geometry><box><size>0.12 8.24 0.7</size></box></geometry>
+          <material>
+            <ambient>0.22 0.22 0.24 1</ambient>
+            <diffuse>0.35 0.35 0.38 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <model name="a8_wall_east">
+      <static>true</static>
+      <pose>8.06 4.0 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.12 8.24 0.7</size></box></geometry></collision>
+        <visual name="v">
+          <geometry><box><size>0.12 8.24 0.7</size></box></geometry>
+          <material>
+            <ambient>0.22 0.22 0.24 1</ambient>
+            <diffuse>0.35 0.35 0.38 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="a8_start_marker">
+      <static>true</static>
+      <pose>1.0 1.0 0.01 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <cylinder><radius>0.35</radius><length>0.02</length></cylinder>
+          </geometry>
+          <material>
+            <ambient>0.1 0.8 0.1 1</ambient>
+            <diffuse>0.1 0.9 0.1 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <model name="a8_goal_marker">
+      <static>true</static>
+      <pose>7.0 7.0 0.01 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <cylinder><radius>0.35</radius><length>0.02</length></cylinder>
+          </geometry>
+          <material>
+            <ambient>0.85 0.1 0.1 1</ambient>
+            <diffuse>0.95 0.1 0.1 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <gui fullscreen="0">
+      <camera name="user_camera">
+        <pose>4 -9 12 0 0.52 1.57</pose>
+      </camera>
+    </gui>
+  </world>
+</sdf>

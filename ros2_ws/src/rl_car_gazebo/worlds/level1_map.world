@@ -1,0 +1,147 @@
+<?xml version="1.0" ?>
+<!--
+  Level1 静态避障训练场（与 map_design_document.md 5.2 一致：空旷区 + 明显通路）。
+  - 与默认 train_ppo 地图边界对齐：x∈[-1,10.5], y∈[-1,9.5]（越界判定与随机障碍采样同域）。
+  - 起点 (0,0)、默认目标 (4,2) 与 launch 默认 spawn / train_ppo 默认 goal 对齐。
+  - 随机 3~5 个障碍仍由 reset 时 SpawnEntity 生成；本 world 用「围墙 + 地面路径提示」保证肉眼可见课程场景。
+  - 路径提示块仅 <visual>，无 collision，避免与 train_obstacle_* 随机重叠时卡死。
+-->
+<sdf version="1.6">
+  <world name="level1_map">
+    <gravity>0 0 -9.8</gravity>
+    <physics type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+
+    <plugin name="gazebo_ros_state" filename="libgazebo_ros_state.so">
+      <update_rate>50.0</update_rate>
+    </plugin>
+
+    <include>
+      <uri>model://sun</uri>
+    </include>
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <!-- ========== 训练区围墙（薄墙，与默认 map_* 外扩约 0.2m）========== -->
+    <!-- 内沿与 train_ppo 默认 map 对齐：x∈[-1,10.5], y∈[-1,9.5]，墙厚 0.12 -->
+    <model name="l1_wall_south">
+      <static>true</static>
+      <pose>4.75 -1.06 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>11.62 0.12 0.7</size></box></geometry></collision>
+        <visual name="v">
+          <geometry><box><size>11.62 0.12 0.7</size></box></geometry>
+          <material>
+            <ambient>0.22 0.22 0.24 1</ambient>
+            <diffuse>0.35 0.35 0.38 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <model name="l1_wall_north">
+      <static>true</static>
+      <pose>4.75 9.56 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>11.62 0.12 0.7</size></box></geometry></collision>
+        <visual name="v">
+          <geometry><box><size>11.62 0.12 0.7</size></box></geometry>
+          <material>
+            <ambient>0.22 0.22 0.24 1</ambient>
+            <diffuse>0.35 0.35 0.38 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <model name="l1_wall_west">
+      <static>true</static>
+      <pose>-1.06 4.25 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.12 10.62 0.7</size></box></geometry></collision>
+        <visual name="v">
+          <geometry><box><size>0.12 10.62 0.7</size></box></geometry>
+          <material>
+            <ambient>0.22 0.22 0.24 1</ambient>
+            <diffuse>0.35 0.35 0.38 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <model name="l1_wall_east">
+      <static>true</static>
+      <pose>10.56 4.25 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.12 10.62 0.7</size></box></geometry></collision>
+        <visual name="v">
+          <geometry><box><size>0.12 10.62 0.7</size></box></geometry>
+          <material>
+            <ambient>0.22 0.22 0.24 1</ambient>
+            <diffuse>0.35 0.35 0.38 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ========== 起点 / 终点（与 Level0 风格一致，便于肉眼对齐）========== -->
+    <model name="l1_start_marker">
+      <static>true</static>
+      <pose>0 0 0.01 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <cylinder>
+              <radius>0.35</radius>
+              <length>0.02</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.1 0.8 0.1 1</ambient>
+            <diffuse>0.1 0.9 0.1 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <model name="l1_goal_marker">
+      <static>true</static>
+      <pose>4 2 0.01 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <cylinder>
+              <radius>0.35</radius>
+              <length>0.02</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.85 0.1 0.1 1</ambient>
+            <diffuse>0.95 0.1 0.1 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ========== 地面路径提示（无 collision，仅示意主通路）========== -->
+    <model name="l1_path_hint">
+      <static>true</static>
+      <pose>2.0 1.0 0.008 0 0 0.46365</pose>
+      <link name="link">
+        <visual name="v">
+          <geometry><box><size>4.6 0.35 0.015</size></box></geometry>
+          <material>
+            <ambient>0.15 0.35 0.75 0.55</ambient>
+            <diffuse>0.2 0.45 0.9 0.55</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <gui fullscreen="0">
+      <camera name="user_camera">
+        <pose>5 -10 14 0 0.55 1.35</pose>
+      </camera>
+    </gui>
+  </world>
+</sdf>

@@ -64,23 +64,34 @@ def generate_launch_description():
         parameters=[{"use_sim_time": use_sim_time, "robot_description": robot_description}],
     )
 
-    # spawn 节点 - 带重试机制
+    # spawn：用 -file 直接读 URDF。
+    # ROS2 的 robot_state_publisher 默认不向 /robot_description 发布 String，
+    # 若用 -topic robot_description，spawn 会一直等不到消息 → 场景有、车永远不出来。
     spawn = Node(
         package="gazebo_ros",
         executable="spawn_entity.py",
         output="screen",
         arguments=[
-            "-topic", "robot_description",
-            "-entity", "rl_car",
-            "-x", x, "-y", y, "-z", z,
-            "-Y", yaw,
-            "-timeout", "30",  # 增加超时时间
+            "-file",
+            PathJoinSubstitution([pkg_desc, "robot.urdf"]),
+            "-entity",
+            "rl_car",
+            "-x",
+            x,
+            "-y",
+            y,
+            "-z",
+            z,
+            "-Y",
+            yaw,
+            "-timeout",
+            "60",
         ],
     )
 
-    # 延迟 spawn，确保 gzserver 完全就绪
+    # 延迟 spawn，确保 gzserver 与 factory 插件就绪
     delayed_spawn = TimerAction(
-        period=5.0,  # 等待 5 秒
+        period=6.0,
         actions=[spawn],
     )
 

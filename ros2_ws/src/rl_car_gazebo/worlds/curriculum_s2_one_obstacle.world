@@ -1,0 +1,94 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <world name="curriculum_s2_one_obstacle">
+    <plugin name="gazebo_ros_state" filename="libgazebo_ros_state.so">
+      <update_rate>50.0</update_rate>
+    </plugin>
+    <include>
+      <uri>model://sun</uri>
+    </include>
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+    <model name="outer_bottom">
+      <static>true</static>
+      <pose>1.0 -2.5 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="c">
+          <geometry><box><size>14.0 0.05 0.5</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>14.0 0.05 0.5</size></box></geometry>
+          <material>
+            <ambient>0.3 0.3 0.3 1</ambient>
+            <diffuse>0.3 0.3 0.3 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <model name="outer_top">
+      <static>true</static>
+      <pose>1.0 2.5 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="c">
+          <geometry><box><size>14.0 0.05 0.5</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>14.0 0.05 0.5</size></box></geometry>
+          <material>
+            <ambient>0.3 0.3 0.3 1</ambient>
+            <diffuse>0.3 0.3 0.3 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <model name="outer_left">
+      <static>true</static>
+      <pose>-5.0 0.0 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="c">
+          <geometry><box><size>0.05 5.0 0.5</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>0.05 5.0 0.5</size></box></geometry>
+          <material>
+            <ambient>0.3 0.3 0.3 1</ambient>
+            <diffuse>0.3 0.3 0.3 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <model name="outer_right">
+      <static>true</static>
+      <pose>7.0 0.0 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="c">
+          <geometry><box><size>0.05 5.0 0.5</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>0.05 5.0 0.5</size></box></geometry>
+          <material>
+            <ambient>0.3 0.3 0.3 1</ambient>
+            <diffuse>0.3 0.3 0.3 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <model name="center_obstacle">
+      <static>true</static>
+      <pose>2.0 1.0 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="c">
+          <geometry><box><size>1.8 0.08 0.5</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>1.8 0.08 0.5</size></box></geometry>
+          <material>
+            <ambient>0.65 0.35 0.2 1</ambient>
+            <diffuse>0.65 0.35 0.2 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>

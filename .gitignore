@@ -3,4 +3,30 @@ venv/
 __pycache__/
 *.pyc
 .pytest_cache/
-checkpoints/*.pt
+*.pyo
+*.pyd
+*.so
+
+# ---- training artifacts ----
+checkpoints/
+logs/
+*.log
+*.csv
+
+# ---- ROS2 / colcon build artifacts ----
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# ---- python packaging artifacts ----
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ---- editor / os ----
+.DS_Store
+.vscode/
+
+# scripts/ is removed; keep it clean if recreated
+scripts/__pycache__/

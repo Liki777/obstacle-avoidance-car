@@ -2,7 +2,11 @@
 最终版奖励范式（工程可落地 + PPO 稳定收敛）。
 
 R =
-  + k_progress * (prev_goal_distance - goal_distance)
+  + k_progress * progress_raw（默认：位移在「指向目标」方向的投影；可关 use_displacement_progress 回退距离差）
+  + k_direction * cos(goal_angle)（默认 1.0 即纯 cos）- k_behind_goal * max(0, |angle|-pi/2)
+  + k_velocity_direction *   v * cos(goal_angle)
+  - k_front_close_penalty * max(0, margin_m - lidar_front_min)
+  + k_lateral_detour * 1[|world_y| > lateral_detour_thresh_m]
   + k_safe     * safe_distance(min_lidar)
   - k_risk     * (|v| / min_lidar)
   - k_turn     * |w|
@@ -17,6 +21,7 @@ R =
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Sequence
 
@@ -25,13 +30,86 @@ import numpy as np
 from obstacle_environment.reward.reward_config import RewardConfig
 
 
-def lidar_min_range(lidar_ranges: np.ndarray) -> float:
-    """一维激光距离数组的最小有限值 (m)；无有效数据时返回大数。"""
+def _finite_non_saturating(
+    lidar_ranges: np.ndarray,
+    *,
+    range_max: float | None,
+) -> np.ndarray:
+    """
+    取有限测距，并剔除 LaserScan 中「满量程 / 无回波」读数（通常 ≈ range_max），
+    以便 min 表示真实障碍距离而非最远可见点。
+    """
     r = np.asarray(lidar_ranges, dtype=np.float64).reshape(-1)
     finite = r[np.isfinite(r)]
     if finite.size == 0:
-        return float(1e3)
+        return finite
+    if range_max is None:
+        return finite
+    hi = float(range_max)
+    eps = max(5e-4, 0.002 * hi)
+    thr = hi - eps
+    close = finite[finite < thr]
+    return close
+
+
+def lidar_min_range(
+    lidar_ranges: np.ndarray,
+    *,
+    range_max: float | None = None,
+) -> float:
+    """
+    一维激光上的「最近障碍物」距离估计 (m)，用于碰撞判定与奖励。
+
+    原先实现：无有限读数时固定返回 1e3，导致 ``dmin <= collision_distance`` 永远不成立，
+    贴墙/传感器全无效时 **不会触发 collision done**。
+
+    现逻辑：
+    - 若有非满量程的有限回波，取最小值（含略小于 ``range_min`` 的「过近」读数，贴墙常见）。
+    - 若全部为 inf/nan：返回 0，视为无可靠测距，env 可触发碰撞终止。
+    - 若有限但均为满量程：返回 ``range_max``（开阔）；未提供 ``range_max`` 时退回 ``np.min(finite)``。
+    """
+    r = np.asarray(lidar_ranges, dtype=np.float64).reshape(-1)
+    if r.size == 0:
+        return 0.0
+
+    close = _finite_non_saturating(r, range_max=range_max)
+    if close.size > 0:
+        return float(np.min(close))
+
+    finite = r[np.isfinite(r)]
+    if finite.size == 0:
+        return 0.0
+    if range_max is not None:
+        return float(range_max)
     return float(np.min(finite))
+
+
+def lidar_front_min_range(
+    lidar_ranges: np.ndarray,
+    *,
+    angle_min: float,
+    angle_increment: float,
+    half_width_rad: float,
+    range_max: float | None = None,
+) -> float:
+    """
+    车头前向扇区（|angle|<=half_width）内的最小有限距离。
+    角度与 LaserScan 一致（通常 base_link 前方约 0 rad）。
+    """
+    r = np.asarray(lidar_ranges, dtype=np.float64).reshape(-1)
+    n = int(r.size)
+    if n == 0:
+        return lidar_min_range(r, range_max=range_max)
+    idx = np.arange(n, dtype=np.float64)
+    angles = float(angle_min) + idx * float(angle_increment)
+    # 归一化到 [-pi, pi] 后比较与 0 的夹角
+    a = np.arctan2(np.sin(angles), np.cos(angles))
+    mask = np.abs(a) <= float(half_width_rad)
+    sector = r[mask]
+    close = _finite_non_saturating(sector, range_max=range_max)
+    if close.size > 0:
+        return float(np.min(close))
+    return lidar_min_range(r, range_max=range_max)
 
 
 @dataclass
@@ -40,11 +118,14 @@ class RewardBreakdown:
 
     total: float
     progress: float
+    direction: float
     safe: float
     risk: float
     turn: float
     stop: float
     smooth: float
+    front_safe: float = 0.0
+    front_risk: float = 0.0
     terminal: float = 0.0
     components: dict[str, float] = field(default_factory=dict)
 
@@ -52,8 +133,11 @@ class RewardBreakdown:
         d = {
             "reward_total": float(self.total),
             "reward_progress": float(self.progress),
+            "reward_direction": float(self.direction),
             "reward_safe": float(self.safe),
             "reward_risk": float(self.risk),
+            "reward_front_safe": float(self.front_safe),
+            "reward_front_risk": float(self.front_risk),
             "reward_turn": float(self.turn),
             "reward_stop": float(self.stop),
             "reward_smooth": float(self.smooth),
@@ -80,6 +164,27 @@ def progress_reward(goal_distance: float, prev_goal_distance: Optional[float]) -
     return float(prev_goal_distance) - float(goal_distance)
 
 
+def displacement_progress_toward_goal(
+    prev_xy: tuple[float, float],
+    curr_xy: tuple[float, float],
+    goal_x: float,
+    goal_y: float,
+) -> float:
+    """
+    世界系下位移 (prev→curr) 在「curr→goal」单位向量上的投影。
+    朝目标移动为正，切向/绕圈为接近 0，远离为负。
+    """
+    dx = float(curr_xy[0] - prev_xy[0])
+    dy = float(curr_xy[1] - prev_xy[1])
+    to_gx = float(goal_x - curr_xy[0])
+    to_gy = float(goal_y - curr_xy[1])
+    dist = float(np.hypot(to_gx, to_gy))
+    if dist < 1e-6:
+        return 0.0
+    ux, uy = to_gx / dist, to_gy / dist
+    return float(dx * ux + dy * uy)
+
+
 def compute_reward(
     *,
     lidar_ranges: np.ndarray,
@@ -88,6 +193,12 @@ def compute_reward(
     goal_angle: float = 0.0,
     linear_x: float = 0.0,
     angular_z: float = 0.0,
+    lidar_front_min: Optional[float] = None,
+    lidar_range_max: Optional[float] = None,
+    prev_robot_xy: Optional[tuple[float, float]] = None,
+    robot_xy: Optional[tuple[float, float]] = None,
+    goal_x: float = 0.0,
+    goal_y: float = 0.0,
     action: Optional[Sequence[float]] = None,
     prev_action: Optional[Sequence[float]] = None,
     config: Optional[RewardConfig] = None,
@@ -98,12 +209,12 @@ def compute_reward(
         lidar_ranges: 原始或下采样前的一维距离数组
         linear_x: 车体前向速度 (m/s)，与 ROS base_link 前向一致时取 twist.linear.x
         goal_distance: 当前到目标欧氏距离
-        prev_goal_distance: 上一时刻距离，用于 delta 型接近目标奖励
-        give_success_bonus: 是否发放一次性到达奖励
-        was_goal_reached_before: 若已为 True，则不再发 success_bonus
+        prev_goal_distance: 上一时刻距离；在 ``use_displacement_progress=False`` 时用距离差作 progress
+        prev_robot_xy / robot_xy / goal_x / goal_y: 位移投影型 progress（与 odom 同坐标系）
     """
     cfg = config or RewardConfig()
-    d_min = lidar_min_range(lidar_ranges)
+    d_min = lidar_min_range(lidar_ranges, range_max=lidar_range_max)
+    d_front = float(lidar_front_min) if lidar_front_min is not None else d_min
     v = float(linear_x)
     w = float(angular_z)
     theta = float(goal_angle)
@@ -113,48 +224,89 @@ def compute_reward(
         return RewardBreakdown(
             total=-float(cfg.collision_penalty),
             progress=0.0,
+            direction=0.0,
             safe=0.0,
             risk=0.0,
             turn=0.0,
             stop=0.0,
             smooth=0.0,
+            front_safe=0.0,
+            front_risk=0.0,
             terminal=-float(cfg.collision_penalty),
-            components={"lidar_min_m": d_min, "terminal": 1.0},
+            components={"lidar_min_m": d_min, "lidar_front_min_m": d_front, "terminal": 1.0},
         )
     if terminal == "success":
         return RewardBreakdown(
             total=float(cfg.success_reward),
             progress=0.0,
+            direction=0.0,
             safe=0.0,
             risk=0.0,
             turn=0.0,
             stop=0.0,
             smooth=0.0,
+            front_safe=0.0,
+            front_risk=0.0,
             terminal=float(cfg.success_reward),
-            components={"lidar_min_m": d_min, "terminal": 1.0},
+            components={"lidar_min_m": d_min, "lidar_front_min_m": d_front, "terminal": 1.0},
         )
     if terminal == "out_of_bounds":
         return RewardBreakdown(
             total=-float(cfg.out_of_bounds_penalty),
             progress=0.0,
+            direction=0.0,
             safe=0.0,
             risk=0.0,
             turn=0.0,
             stop=0.0,
             smooth=0.0,
+            front_safe=0.0,
+            front_risk=0.0,
             terminal=-float(cfg.out_of_bounds_penalty),
-            components={"lidar_min_m": d_min, "terminal": 1.0},
+            components={"lidar_min_m": d_min, "lidar_front_min_m": d_front, "terminal": 1.0},
         )
 
-    r_progress = cfg.k_progress * progress_reward(goal_distance, prev_goal_distance)
-    # 方向对齐：cos(theta) ∈ [-1, 1]，theta=goal_angle（相对车头方向）
-    r_dir = cfg.k_direction * float(np.cos(theta))
+    if (
+        cfg.use_displacement_progress
+        and prev_robot_xy is not None
+        and robot_xy is not None
+    ):
+        raw_prog = displacement_progress_toward_goal(
+            prev_robot_xy, robot_xy, float(goal_x), float(goal_y)
+        )
+    else:
+        raw_prog = progress_reward(goal_distance, prev_goal_distance)
+
+    prog_scale = 1.0
+    if abs(theta) > float(cfg.progress_heading_gate_rad):
+        prog_scale = float(cfg.progress_heading_gate_scale)
+    r_progress = float(cfg.k_progress) * float(raw_prog) * prog_scale
+
+    cos_t = float(np.cos(theta))
+    r_dir = float(cfg.k_direction) * cos_t
+    behind_excess = max(0.0, abs(float(theta)) - (math.pi / 2.0))
+    if behind_excess > 0.0:
+        r_dir -= float(cfg.k_behind_goal) * behind_excess
     # 动作方向一致性：朝目标方向前进奖励更大，反向前进惩罚
-    r_vdir = cfg.k_velocity_direction * (v * float(np.cos(theta)))
+    r_vdir = float(cfg.k_velocity_direction) * (v * cos_t)
     r_safe = cfg.k_safe * safe_distance_reward(d_min, cfg)
 
     denom = max(float(d_min), float(cfg.risk_eps))
     r_risk = -cfg.k_risk * (abs(v) / denom)
+
+    r_front_safe = cfg.k_front_safe * safe_distance_reward(d_front, cfg)
+    denom_f = max(float(d_front), float(cfg.risk_eps))
+    r_front_risk = -cfg.k_front_risk * (abs(v) / denom_f)
+
+    margin_fc = float(cfg.front_close_penalty_margin_m)
+    r_front_close = 0.0
+    if float(d_front) < margin_fc:
+        r_front_close = -float(cfg.k_front_close_penalty) * (margin_fc - float(d_front))
+
+    r_detour = 0.0
+    if robot_xy is not None and float(cfg.k_lateral_detour) != 0.0:
+        if abs(float(robot_xy[1])) > float(cfg.lateral_detour_thresh_m):
+            r_detour = float(cfg.k_lateral_detour)
 
     r_turn = -cfg.k_turn * abs(w)
 
@@ -168,28 +320,48 @@ def compute_reward(
         if n > 0:
             r_smooth = -cfg.k_smooth * float(np.sum(np.abs(a[:n] - p[:n])))
 
-    total = float(r_progress + r_dir + r_vdir + r_safe + r_risk + r_turn + r_stop + r_smooth)
+    total = float(
+        r_progress
+        + r_dir
+        + r_vdir
+        + r_safe
+        + r_risk
+        + r_front_safe
+        + r_front_risk
+        + r_front_close
+        + r_detour
+        + r_turn
+        + r_stop
+        + r_smooth
+    )
 
     return RewardBreakdown(
         total=total,
         progress=float(r_progress),
+        direction=float(r_dir),
         safe=float(r_safe),
         risk=float(r_risk),
         turn=float(r_turn),
         stop=float(r_stop),
         smooth=float(r_smooth),
+        front_safe=float(r_front_safe),
+        front_risk=float(r_front_risk),
         terminal=0.0,
         components={
             "lidar_min_m": float(d_min),
+            "lidar_front_min_m": float(d_front),
             "goal_distance": float(goal_distance),
             "goal_angle": float(theta),
-            "progress_raw": progress_reward(goal_distance, prev_goal_distance),
+            "progress_raw": float(raw_prog),
+            "progress_scale_heading_gate": float(prog_scale),
             "safe_unit": safe_distance_reward(d_min, cfg),
             "v": v,
             "w": w,
-            "cos_theta": float(np.cos(theta)),
+            "cos_theta": cos_t,
             "r_dir": float(r_dir),
             "r_vdir": float(r_vdir),
+            "reward_front_close": float(r_front_close),
+            "reward_detour": float(r_detour),
         },
     )
 

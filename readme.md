@@ -10,6 +10,41 @@
 
 ## 实验结果
 
+## 快速开始（推荐只记一个入口）
+
+安装依赖：
+
+```bash
+pip install -r requirements.txt
+```
+
+Mock 训练（不依赖 ROS/Gazebo）：
+
+```bash
+python3 run.py train --task mock --model ppo --total-updates 50 --rollout-steps 512
+```
+
+Gazebo 训练（需已启动仿真并 `source ros2_ws/install/setup.bash`）：
+
+```bash
+python3 run.py train --task gazebo --model ppo --total-updates 20 --rollout-steps 256
+```
+
+Gazebo 链路冒烟测试（订阅 scan/odom/camera 并发布 cmd_vel）：
+
+```bash
+python3 run.py smoke
+```
+
+## 目录约定（精简版）
+
+- `obstacle_environment/`：强化学习环境（ROS2 话题订阅、观测/动作/奖励/重置等）
+- `rl_algorithms/`：PPO 实现与训练入口
+- `ros2_ws/src/`：ROS2 包源码（仅保留 `src`；`build/ install/ log/` 属于生成物，已忽略）
+- `run.py`：唯一通用入口（配置 task/model 并运行）
+- `maps/`：Gazebo world 地图素材（如需可自行加入版本控制或按需下载）
+- `logs/ checkpoints/`：训练产物（运行时生成，默认忽略）
+
 阶段 0：准备环境
 
 安装 ROS2（Humble 或 Iron）

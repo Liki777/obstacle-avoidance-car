@@ -47,8 +47,18 @@ class RobotTaskSpec:
         camera_feature_dim: int = 0,
         input_is_normalized: bool = True,
         reward_config: RewardConfig | None = None,
+        linear_x_min: float | None = None,
+        linear_x_max: float | None = None,
+        angular_z_max: float | None = None,
+        angular_z_min: float | None = None,
     ) -> RobotTaskSpec:
         """默认与 `observation_builder` / 差速 Gazebo 小车常见设置一致。"""
+        lx_hi = float(linear_x_max) if linear_x_max is not None else 1.0
+        lx_lo = float(linear_x_min) if linear_x_min is not None else -lx_hi
+        az_hi = float(angular_z_max) if angular_z_max is not None else 0.5
+        az_lo = float(angular_z_min) if angular_z_min is not None else -0.5
+        if angular_z_max is not None and angular_z_min is None:
+            az_lo = -az_hi
         return cls(
             observation_config=ObservationConfig(
                 lidar_dim=lidar_dim,
@@ -56,6 +66,12 @@ class RobotTaskSpec:
                 include_camera=include_camera,
                 camera_feature_dim=camera_feature_dim,
             ),
-            action_config=ActionConfig(input_is_normalized=input_is_normalized),
+            action_config=ActionConfig(
+                linear_x_min=lx_lo,
+                linear_x_max=lx_hi,
+                angular_z_min=az_lo,
+                angular_z_max=az_hi,
+                input_is_normalized=input_is_normalized,
+            ),
             reward_config=reward_config or RewardConfig(),
         )

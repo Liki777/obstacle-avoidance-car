@@ -14,7 +14,7 @@ class ActionConfig:
     """
     Attributes:
         linear_x_min / linear_x_max: 前进速度上下界 (m/s)
-        angular_z_min / angular_z_max: 角速度上下界 (rad/s)
+        angular_z_min / angular_z_max: 角速度上下界 (rad/s)；归一化动作时等价于 max|ω|（默认 ±0.5 对应 0.5×raw）
         action_dim: 策略输出维度，差速车固定为 2 -> [linear_x, angular_z]
         input_is_normalized: True 时假定策略输出在 [-1, 1]（如 tanh），
             将线性映射到上述物理区间；False 时假定已是物理量，仅做 clip。
@@ -22,8 +22,8 @@ class ActionConfig:
 
     linear_x_min: float = -1.0
     linear_x_max: float = 1.0
-    angular_z_min: float = -2.0
-    angular_z_max: float = 2.0
+    angular_z_min: float = -0.5
+    angular_z_max: float = 0.5
     action_dim: int = 2
     input_is_normalized: bool = True
 

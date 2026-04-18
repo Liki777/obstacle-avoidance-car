@@ -19,6 +19,7 @@ from obstacle_environment.reward.reward_computer import (
     RewardBreakdown,
     compute_reward,
     compute_reward_from_observation,
+    lidar_front_min_range,
     lidar_min_range,
 )
 from obstacle_environment.reward.reward_config import RewardConfig
@@ -29,4 +30,5 @@ __all__ = [
     "compute_reward",
     "compute_reward_from_observation",
     "lidar_min_range",
+    "lidar_front_min_range",
 ]
