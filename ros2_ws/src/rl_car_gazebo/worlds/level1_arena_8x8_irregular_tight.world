@@ -1,0 +1,198 @@
+<?xml version="1.0" ?>
+<!--
+  Irregular tight Level1 arena (8×8):
+  - Outer walls (same as arena_8x8)
+  - Inner ring walls restrict free space to [1,7]×[1,7] with a few asymmetric gates
+  - Fixed irregular large obstacles inside to force static obstacle avoidance (no easy perimeter bypass)
+-->
+<sdf version="1.6">
+  <world name="level1_arena_8x8_irregular_tight">
+    <gravity>0 0 -9.8</gravity>
+    <physics type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+
+    <plugin name="gazebo_ros_state" filename="libgazebo_ros_state.so">
+      <update_rate>50.0</update_rate>
+    </plugin>
+
+    <include><uri>model://sun</uri></include>
+    <include><uri>model://ground_plane</uri></include>
+
+    <!-- ===== Outer walls (inner boundary roughly [0,8]×[0,8]) ===== -->
+    <model name="a8_wall_south"><static>true</static><pose>4.0 -0.06 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>8.24 0.12 0.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>8.24 0.12 0.7</size></box></geometry>
+          <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.35 0.35 0.38 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="a8_wall_north"><static>true</static><pose>4.0 8.06 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>8.24 0.12 0.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>8.24 0.12 0.7</size></box></geometry>
+          <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.35 0.35 0.38 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="a8_wall_west"><static>true</static><pose>-0.06 4.0 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.12 8.24 0.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.12 8.24 0.7</size></box></geometry>
+          <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.35 0.35 0.38 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="a8_wall_east"><static>true</static><pose>8.06 4.0 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.12 8.24 0.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.12 8.24 0.7</size></box></geometry>
+          <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.35 0.35 0.38 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Start/goal markers -->
+    <model name="a8_start_marker"><static>true</static><pose>1.0 1.0 0.01 0 0 0</pose>
+      <link name="link"><visual name="visual"><geometry><cylinder><radius>0.35</radius><length>0.02</length></cylinder></geometry>
+        <material><ambient>0.1 0.8 0.1 1</ambient><diffuse>0.1 0.9 0.1 1</diffuse></material></visual></link></model>
+    <model name="a8_goal_marker"><static>true</static><pose>7.0 7.0 0.01 0 0 0</pose>
+      <link name="link"><visual name="visual"><geometry><cylinder><radius>0.35</radius><length>0.02</length></cylinder></geometry>
+        <material><ambient>0.85 0.1 0.1 1</ambient><diffuse>0.95 0.1 0.1 1</diffuse></material></visual></link></model>
+
+    <!-- ===== Inner ring walls (moved outward): keep start/goal markers clear ===== -->
+    <!-- We move the inner walls from x/y=1,7 to x/y=0.35,7.65 so:
+         - start marker at (1,1), radius=0.35 stays fully inside (>=0.65 away from outer walls)
+         - goal marker at (7,7), radius=0.35 stays fully inside
+         - robot spawn at (1,1) won't intersect inner walls -->
+    <!-- Wall thickness=0.12, height=0.7 -->
+
+    <!-- South inner wall (y=0.35) with gate centered at x=1.55, gate width=0.95 -->
+    <model name="ir_wall_south_left"><static>true</static><pose>0.7125 0.35 0.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>0.725 0.12 0.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.725 0.12 0.7</size></box></geometry></visual></link></model>
+    <model name="ir_wall_south_right"><static>true</static><pose>4.8375 0.35 0.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>5.625 0.12 0.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>5.625 0.12 0.7</size></box></geometry></visual></link></model>
+
+    <!-- West inner wall (x=0.35) with gate centered at y=3.35, gate width=0.95 -->
+    <model name="ir_wall_west_bottom"><static>true</static><pose>0.35 1.6125 0.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>0.12 2.525 0.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.12 2.525 0.7</size></box></geometry></visual></link></model>
+    <model name="ir_wall_west_top"><static>true</static><pose>0.35 5.7375 0.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>0.12 3.825 0.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.12 3.825 0.7</size></box></geometry></visual></link></model>
+
+    <!-- North inner wall (y=7.65) with gate centered at x=4.85, gate width=0.95 -->
+    <model name="ir_wall_north_left"><static>true</static><pose>2.3625 7.65 0.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>4.025 0.12 0.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>4.025 0.12 0.7</size></box></geometry></visual></link></model>
+    <model name="ir_wall_north_right"><static>true</static><pose>6.4875 7.65 0.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>2.325 0.12 0.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>2.325 0.12 0.7</size></box></geometry></visual></link></model>
+
+    <!-- East inner wall (x=7.65) with gate centered at y=5.55, gate width=0.95 -->
+    <model name="ir_wall_east_bottom"><static>true</static><pose>7.65 2.7125 0.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>0.12 4.725 0.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.12 4.725 0.7</size></box></geometry></visual></link></model>
+    <model name="ir_wall_east_top"><static>true</static><pose>7.65 6.8375 0.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>0.12 1.625 0.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.12 1.625 0.7</size></box></geometry></visual></link></model>
+
+    <!-- ===== Irregular fixed obstacles inside the inner ring ===== -->
+    <!-- Large cubes -->
+    <model name="fix_cube_big_0"><static>true</static><pose>3.15 6.05 0.35 0 0 0.20</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.78 0.62 0.70</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.78 0.62 0.70</size></box></geometry></visual>
+      </link>
+    </model>
+    <model name="fix_cube_big_1"><static>true</static><pose>5.85 3.55 0.35 0 0 0.55</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.70 0.80 0.70</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.70 0.80 0.70</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <!-- Mid cubes -->
+    <model name="fix_cube_mid_0"><static>true</static><pose>2.55 3.95 0.35 0 0 0.35</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.56 0.56 0.70</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.56 0.56 0.70</size></box></geometry></visual>
+      </link>
+    </model>
+    <model name="fix_cube_mid_1"><static>true</static><pose>4.35 2.45 0.35 0 0 0.10</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.52 0.64 0.70</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.52 0.64 0.70</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <!-- Cylinders -->
+    <model name="fix_cyl_0"><static>true</static><pose>4.95 6.15 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.34</radius><length>0.70</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.34</radius><length>0.70</length></cylinder></geometry></visual>
+      </link>
+    </model>
+    <model name="fix_cyl_1"><static>true</static><pose>2.05 5.05 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.28</radius><length>0.70</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.28</radius><length>0.70</length></cylinder></geometry></visual>
+      </link>
+    </model>
+    <model name="fix_cyl_2"><static>true</static><pose>5.05 4.55 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.30</radius><length>0.70</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.30</radius><length>0.70</length></cylinder></geometry></visual>
+      </link>
+    </model>
+
+    <!-- Flat cylinders (wider, shorter) -->
+    <model name="fix_flat_0"><static>true</static><pose>3.95 5.05 0.225 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.46</radius><length>0.45</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.46</radius><length>0.45</length></cylinder></geometry></visual>
+      </link>
+    </model>
+    <model name="fix_flat_1"><static>true</static><pose>3.05 2.85 0.225 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.42</radius><length>0.45</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.42</radius><length>0.45</length></cylinder></geometry></visual>
+      </link>
+    </model>
+
+    <!-- Extra scattered obstacles (slightly increase density; break accidental straight corridors) -->
+    <model name="fix_cyl_extra_0"><static>true</static><pose>2.35 1.75 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.22</radius><length>0.70</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.22</radius><length>0.70</length></cylinder></geometry></visual>
+      </link>
+    </model>
+    <model name="fix_cube_extra_0"><static>true</static><pose>6.05 6.20 0.35 0 0 0.30</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.46 0.52 0.70</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.46 0.52 0.70</size></box></geometry></visual>
+      </link>
+    </model>
+    <model name="fix_flat_extra_0"><static>true</static><pose>4.90 3.00 0.225 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.36</radius><length>0.45</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.36</radius><length>0.45</length></cylinder></geometry></visual>
+      </link>
+    </model>
+    <!-- Thin deflector wall (still a fixed static obstacle): forces an S-bend without fully blocking) -->
+    <model name="fix_wall_deflector_0"><static>true</static><pose>4.25 4.15 0.35 0 0 0.92</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>1.15 0.12 0.70</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>1.15 0.12 0.70</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <gui fullscreen="0"><camera name="user_camera"><pose>4 -9 12 0 0.52 1.57</pose></camera></gui>
+  </world>
+</sdf>
+

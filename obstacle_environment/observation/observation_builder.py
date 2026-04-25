@@ -24,6 +24,7 @@ def build_observation(
     camera_data: Any,
     odom_data: Any,
     goal_data: Any,
+    road_data: Any = None,
     config: Optional[ObservationConfig] = None,
 ) -> dict[str, Any]:
     cfg = config or ObservationConfig()
@@ -50,6 +51,28 @@ def build_observation(
     if cfg.include_camera and camera_feat.size > 0:
         state_parts.append(camera_feat.astype(np.float32, copy=False))
 
+    # Road features (optional): [cte, heading_error, lookahead_xy...]
+    road_feat = np.asarray([], dtype=np.float32)
+    if cfg.include_road:
+        if isinstance(road_data, dict):
+            cte = float(road_data.get("cte", 0.0))
+            heading_error = float(road_data.get("heading_error", 0.0))
+            la = road_data.get("lookahead_xy")
+            if isinstance(la, np.ndarray):
+                la_flat = la.reshape(-1).astype(np.float32, copy=False)
+            else:
+                la_flat = np.zeros((2 * int(cfg.road_lookahead_n),), dtype=np.float32)
+            need = 2 * int(cfg.road_lookahead_n)
+            if la_flat.size < need:
+                la_flat = np.pad(la_flat, (0, need - la_flat.size))
+            la_flat = la_flat[:need]
+            road_feat = np.concatenate(
+                [np.asarray([cte, heading_error], dtype=np.float32), la_flat], axis=0
+            ).astype(np.float32, copy=False)
+        else:
+            road_feat = np.zeros((2 + 2 * int(cfg.road_lookahead_n),), dtype=np.float32)
+        state_parts.append(road_feat)
+
     state_vec = np.concatenate(state_parts, axis=0).astype(np.float32, copy=False)
 
     return {
@@ -63,4 +86,6 @@ def build_observation(
         "camera": camera_feat,  # 前期为 (0,) 或 zeros
         "odom": odom_data,
         "goal": goal_data,
+        "road": road_data if isinstance(road_data, dict) else {},
+        "road_feat": road_feat,
     }

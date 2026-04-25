@@ -1,363 +1,126 @@
-# PPO 动态避障小车：随机障碍物与 Level1~3 训练设计文档
+# PPO 小车避障：课程 Level0~5 与地图设计说明
 
-## 1. 总体目标
+## 1. 总体目标与结论
 
-目标是在 ROS2 + Gazebo + TurtleBot3 环境中，使用 PPO 算法训练小车实现动态避障。
+**目标**：在 ROS2 + Gazebo 环境下，用 PPO 学到从起点安全到达终点的策略；随课程逐步提高**静态几何不确定性**与**动态障碍不确定性**，最终具备在「随机静态 + 随机动态」并存场景中的泛化能力。
 
-整个系统分为三部分：
+**课程结论（是否采用当前六级划分）**：
 
-1. Gazebo 障碍物生成
-2. PPO 状态-动作-奖励设计
-3. 分阶段训练（Level1~Level3）
-
-推荐采用课程式训练（Curriculum Learning）：
-
-* Level1：先学静态障碍物
-* Level2：再加入少量动态障碍物
-* Level3：最后加入多个动态障碍物
-
-这样可以降低 PPO 训练难度，避免一开始环境过于复杂导致策略无法收敛。
+- **可以采用**。顺序符合「感知运动规律 → 空间约束 → 引入时间维度 → 再叠加组合难度」的课程学习思路，有利于 PPO 稳定收敛。
+- **设计要点**：Level3 使用**固定轨迹**动态体，便于策略先学会「时序预测 + 让行」；Level4 再引入**随机参数**动态体，降低过拟合到单一正弦/圆周模式的风险；Level5 与最终目标最接近。
+- **可选增强（非必须）**：在后期训练中混入少量早期样本（例如 Level5 时 5%~10% 仅用静态或仅用动态），可减轻对某一子任务的遗忘；若训练时间有限可不做。
 
 ---
 
-# 2. 随机障碍物生成规则
+## 2. 课程 Level0 ~ Level5 定义
 
-## 2.1 地图区域定义
+| Level | 静态障碍 | 动态障碍 | 训练侧重点 |
+|------:|----------|----------|------------|
+| **0** | 无 | 无 | 仅学到达目标（速度/朝向/进度奖励 shaping） |
+| **1** | **固定**（每局相同布局） | 无 | 绕障几何、可复现调试策略与奖励 |
+| **2** | **随机**（每局 reset 重采样） | 无 | 对静态布局泛化 |
+| **3** | 无 | **固定**（每局相同运动律：正弦/圆周等） | 预测运动趋势、让行时机 |
+| **4** | 无 | **随机**（每局随机初相、振幅、角频率、模式） | 对动态参数泛化 |
+| **5** | **随机** | **随机** | 接近最终目标：联合静动态避障 |
 
-先定义障碍物允许出现的区域：
+**实现约定（与代码一致）**：
 
-```python
-x_min, x_max = -8.0, 8.0
-y_min, y_max = -8.0, 8.0
+- `rl_algorithms/train_ppo.py --level N`（`N∈[0,5]`）自动配置 `GazeboEnvConfig` 的 `static_obstacle_mode` / `dynamic_obstacle_mode` 及默认奖励预设。
+- Level1~5 默认启用 **8×8 m** 训练域（越界与采样边界约 `x,y∈[-0.25,8.25]`），默认 **起点 (1,1)**、**终点 (7,7)**；可用 `--no-arena-8x8` 关闭并自行指定 `--map-*` / `--spawn-*` / `--goal-*`。
+- Level1 固定静态障碍来自 `builtin_level1_fixed_mixed_3x3()`：场地中部 **3×3 共 9 个**混合体（扁圆柱 / 方柱 / 竖圆柱交替）；亦可通过 `GazeboEnvConfig.fixed_static_obstacles_xyyaw` 自定义为旧版「仅盒列表」布局。
+- Level3 固定动态轨迹来自同模块的 `builtin_fixed_dynamic_specs()`；每仿真步用 `SetEntityState` 更新位姿（与文档 3 节一致）。
+
+---
+
+## 3. 动态障碍物实现（仿真层）
+
+动态障碍在 Gazebo Classic 中的实现方式：
+
+1. `SpawnEntity` 生成与静态相同的盒模型（名称前缀 `train_dyn_*`）。
+2. 每个控制周期根据解析式更新位姿，调用 **`/set_entity_state`**（或 `/gazebo/set_entity_state`）写入 `world` 系位姿。
+3. 角速度设为零，避免与 ODE 积分抢控制权（等价于「运动学动画体」）。
+
+**支持的运动模式（Level3/4/5）**：
+
+- `sin_x`：`x = x0 + A·sin(ωt+φ)`，`y = y0`
+- `sin_y`：`y = y0 + A·sin(ωt+φ)`，`x = x0`
+- `circle`：`x = x0 + A·cos(ωt+φ)`，`y = y0 + A·sin(ωt+φ)`
+
+Level4/5 在每次 `reset()` 时对 `x0,y0,A,ω,φ` 及模式做均匀/离散随机（需满足不贴墙、不压起点/终点邻域）。
+
+---
+
+## 4. 随机静态障碍物规则（Level2 / Level5）
+
+采样区域与 `GazeboEnvConfig.map_*` 一致；默认 8×8 课程下与围墙内场对齐。
+
+建议约束（代码中 `StaticObstacleSamplingConfig` 可调）：
+
+1. 与机器人起点足够远（默认约 ≥1.5 m）。
+2. 与当前目标点足够远。
+3. 障碍两两中心距大于阈值（默认约 ≥1.0 m）。
+4. 每个障碍唯一命名，便于 `DeleteEntity` 清理。
+
+数量默认：Level2 为 `static_obstacle_count_min/max`（默认 3~5）；Level5 与 Level2 相同逻辑，可与动态数量一起在后续按论文需求再调参。
+
+---
+
+## 5. 推荐地图（Gazebo world）
+
+| Level | 推荐 world（`ros2 launch rl_car_gazebo sim.launch.py world:=...`） | 说明 |
+|------:|---------------------------------------------------------------------|------|
+| 0 | `level0_arena_8x8.world` 或任意空旷图 | 无障碍；8×8 围墙便于与后续阶段视觉一致 |
+| 1 | `level1_arena_8x8.world` | 与固定静态坐标系一致；障碍由程序 spawn |
+| 2 | `level1_arena_8x8.world` / `arena_8x8.world` | 与 Level1 同几何，仅采样策略不同 |
+| 3 | `level2_arena_8x8.world` 或 `arena_8x8.world` | 无障碍块；动态体由程序生成 |
+| 4 | 同上 | 随机动态 |
+| 5 | `level3_arena_8x8.world` 或 `arena_8x8.world` | 高对比标记可选；静+动均由程序生成 |
+
+> 旧版 `level1_map.world`（更大训练区）仍保留，用于与历史 checkpoint 对齐；**新课程默认以 8×8 arena 为主**。
+
+---
+
+## 6. 训练流程与 checkpoint
+
+建议顺序：`0 → 1 → 2 → 3 → 4 → 5`，每阶段从上一阶段 `checkpoints/level{N-1}/latest.pt` 热启动（`train_ppo` 默认行为，可用 `--no-auto-prev-load` 关闭）。
+
+示例：
+
+```bash
+# 先启动仿真（示例 Level2）
+ros2 launch rl_car_gazebo sim.launch.py world:=level1_arena_8x8.world \
+  x:=1.0 y:=1.0 z:=0.1 yaw:=0.7854
+
+python -m rl_algorithms.train_ppo --gazebo --level 2 --total-updates 200
 ```
 
-地图中还需要定义：
+纯展示（不训练）与开图推荐统一用根目录 ``run.py`` / ``show_map.py``：
 
-```python
-robot_start = (0.0, 0.0)
-goal_pos = (6.0, 6.0)
-```
+- 开 Gazebo 地图：``python3 run.py show --level 1`` 或 ``python3 show_map.py --level 1``（与课程 world 一致）。
+- 障碍演示：``python3 run.py demo --level 1`` 或 ``python3 demo_obstacles.py --level 1``（Level1 固定不刷新；Level2 按 ``--period`` 刷新）。
+- 训练：``python3 run.py train --task gazebo --level 1``（先另终端 ``run.py show --level 1`` 起仿真）。
 
----
+**步数建议（量级，可按算力调整）**：
 
-## 2.2 障碍物生成限制
-
-为了保证训练稳定，随机障碍物不能完全无约束生成。
-
-建议加入以下规则：
-
-1. 障碍物不能离机器人起点太近
-2. 障碍物不能离目标点太近
-3. 障碍物之间不能重叠
-4. 障碍物不能堵死所有道路
-5. 每个障碍物需要有唯一名称
-
-推荐阈值：
-
-```python
-min_dist_to_robot = 1.5
-min_dist_to_goal = 1.5
-min_dist_between_obstacles = 1.0
-```
+- Level0：先收敛「到点」行为，约 50k~200k 环境步量级。
+- Level1~2：静态绕障与泛化，各约 100k~400k。
+- Level3~4：动态专项，各约 200k~600k。
+- Level5：联合难度，≥400k 或直至评估成功率稳定。
 
 ---
 
-## 2.3 随机位置生成伪代码
+## 7. 奖励与策略（与 `RewardConfig` 预设对齐）
 
-```python
-obstacles = []
+默认映射（可用 `--reward-profile` 覆盖）：
 
-for i in range(num_obstacles):
-    valid = False
+- Level0：`stage1_walk`（强调进度与朝向，弱化「只对齐不打分」的投机解）。
+- Level1~2：`stage2_simple_avoid`。
+- Level3~5：`stage3_hard_avoid`（更强调风险与前方净空）。
 
-    while not valid:
-        x = random.uniform(x_min, x_max)
-        y = random.uniform(y_min, y_max)
-
-        # 检查与机器人起点距离
-        if distance((x, y), robot_start) < min_dist_to_robot:
-            continue
-
-        # 检查与目标点距离
-        if distance((x, y), goal_pos) < min_dist_to_goal:
-            continue
-
-        # 检查与已有障碍物距离
-        overlap = False
-        for obs in obstacles:
-            if distance((x, y), obs.position) < min_dist_between_obstacles:
-                overlap = True
-                break
-
-        if overlap:
-            continue
-
-        valid = True
-
-    obstacles.append({
-        "name": f"obstacle_{i}",
-        "x": x,
-        "y": y
-    })
-```
+策略网络结构不必随 Level 改变；**观测空间维数不变**时同一 MLP 可贯穿课程。若后续加入显式速度通道或预测头，再在文档与代码中单独开版本说明。
 
 ---
 
-## 2.4 Gazebo 中生成障碍物伪代码
+## 8. 附录：旧版 Level1~3 叙述的迁移说明
 
-```python
-for obstacle in obstacles:
-    spawn_model(
-        name=obstacle["name"],
-        sdf_path="box/model.sdf",
-        x=obstacle["x"],
-        y=obstacle["y"],
-        z=0.0
-    )
-```
-
-生成障碍物通常使用 Gazebo 服务：
-
-```python
-/gazebo/spawn_sdf_model
-```
-
----
-
-# 3. 动态障碍物实现规则
-
-动态障碍物的核心是不断更新模型位置。
-
-一般流程：
-
-1. 先随机生成障碍物初始位置
-2. 给每个障碍物分配运动模式
-3. 定时调用 set_model_state 更新位置
-
-常用 Gazebo 服务：
-
-```python
-/gazebo/set_model_state
-```
-
----
-
-## 3.1 左右移动障碍物
-
-```python
-x = x0 + A * sin(t)
-y = y0
-```
-
-伪代码：
-
-```python
-for each timestep:
-    obstacle.x = obstacle.x0 + amplitude * sin(current_time)
-    obstacle.y = obstacle.y0
-```
-
----
-
-## 3.2 上下移动障碍物
-
-```python
-x = x0
-y = y0 + A * sin(t)
-```
-
----
-
-## 3.3 圆周运动障碍物
-
-```python
-x = x0 + r * cos(t)
-y = y0 + r * sin(t)
-```
-
----
-
-## 3.4 随机游走障碍物
-
-随机游走障碍物每隔固定时间改变方向：
-
-```python
-if step % 50 == 0:
-    theta = random.uniform(-pi, pi)
-
-x += speed * cos(theta)
-y += speed * sin(theta)
-```
-
----
-
-# 5. Level1：随机静态障碍物
-
-## 5.1 训练目标
-
-让小车学会：
-
-* 不撞障碍物
-* 能够绕开障碍物
-* 能到达目标点
-
----
-
-## 5.2 环境设置
-
-```python
-num_static_obstacles = 3~5
-num_dynamic_obstacles = 0
-```
-
-障碍物只生成一次，不会移动。
-
-推荐地图：
-
-* 空旷区域
-* 障碍物分散
-* 保留明显通路
-
----
-
-## 5.3 Level1 伪代码
-
-```python
-reset_environment()
-spawn_random_static_obstacles()
-
-while not done:
-    state = get_state()
-    action = ppo.predict(state)
-    apply_action(action)
-
-    next_state = get_state()
-    reward = compute_reward()
-
-    store_transition(state, action, reward, next_state)
-```
-
----
-
-# 6. Level2：随机静态 + 单个动态障碍物
-
-## 6.1 训练目标
-
-让小车学会：
-
-* 避开静态障碍物
-* 识别动态障碍物运动趋势
-* 等待障碍物离开后再前进
-
----
-
-## 6.2 环境设置
-
-```python
-num_static_obstacles = 4~6
-num_dynamic_obstacles = 1
-```
-
-动态障碍物推荐采用简单运动：
-
-* 左右移动
-* 上下移动
-
----
-
-## 6.3 Level2 伪代码
-
-```python
-reset_environment()
-spawn_random_static_obstacles()
-spawn_one_dynamic_obstacle()
-
-while not done:
-    update_dynamic_obstacle_position()
-
-    state = get_state()
-    action = ppo.predict(state)
-    apply_action(action)
-
-    next_state = get_state()
-    reward = compute_reward()
-
-    store_transition(state, action, reward, next_state)
-```
-
----
-
-# 7. Level3：随机静态 + 多动态障碍物
-
-## 7.1 训练目标
-
-让小车学会：
-
-* 同时处理多个动态目标
-* 在复杂场景中寻找安全路径
-* 提前预测动态障碍物未来位置
-
----
-
-## 7.2 环境设置
-
-```python
-num_static_obstacles = 5~8
-num_dynamic_obstacles = 2~4
-```
-
-动态障碍物可使用不同运动模式混合：
-
-* 左右移动
-* 上下移动
-* 圆周运动
-* 随机游走
-
----
-
-## 7.3 Level3 伪代码
-
-```python
-reset_environment()
-spawn_random_static_obstacles()
-spawn_multiple_dynamic_obstacles()
-
-while not done:
-    for obstacle in dynamic_obstacles:
-        update_obstacle_motion(obstacle)
-
-    state = get_state()
-    action = ppo.predict(state)
-    apply_action(action)
-
-    next_state = get_state()
-    reward = compute_reward()
-
-    store_transition(state, action, reward, next_state)
-```
-
----
-
-# 8. 推荐训练流程
-
-建议训练顺序：
-
-```python
-train_level1()
-load_best_model()
-train_level2()
-load_best_model()
-train_level3()
-```
-
-这样 PPO 会逐步适应更复杂的环境。
-
-推荐每个阶段至少训练：
-
-* Level1：100k ~ 300k steps
-* Level2：300k ~ 600k steps
-* Level3：600k+ steps
-
----
-
-
+早期文档将「Level1=随机静态、Level2=静+单动态、Level3=静+多动态」与当前 **Level0~5** 六级划分**不一致**。以本节为准；代码与 `train_ppo --level` 已与六级课程对齐。

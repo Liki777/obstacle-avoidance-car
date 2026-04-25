@@ -79,7 +79,7 @@ def _box_sdf_general(*, sx: float, sy: float, sz: float) -> str:
 
 
 def _cylinder_sdf(*, radius: float, length: float) -> str:
-    """扁圆柱：圆柱轴向为 Z，length 很小时为扁盘。"""
+    """扁/高圆柱：圆柱轴向为 Z，length 为总高。过矮时水平激光可能从顶面以上扫过，需与激光安装高度协调。"""
     r = float(radius)
     h = float(length)
     return f"""<?xml version="1.0"?>
@@ -113,7 +113,7 @@ class MixedObstacleSpec:
     混合静态障碍（由 ``GazeboObstacleManager.spawn_mixed_static`` 生成）。
 
     - ``cube``：``sx, sy, sz`` 为 full box size（米）。
-    - ``cylinder``：``sx``=半径，``sy``=轴向高度（扁盘取小值），``sz`` 忽略。
+    - ``cylinder``：``sx``=半径，``sy``=轴向总高度（Z）；扁圆柱若要被车载激光打到侧面，``sy`` 须不低于扫描平面高度（参考 URDF 激光安装 z≈0.21m），``sz`` 忽略。
     - ``wall``：``sx``=面内长边，``sy``=厚度，``sz``=高度；``yaw`` 旋转后面向可随机。
     """
 
@@ -137,6 +137,7 @@ class GazeboObstacleManagerConfig:
     # 服务名候选：不同启动方式/命名空间下可能不同
     spawn_entity_services: tuple[str, ...] = ("/spawn_entity", "/gazebo/spawn_entity")
     delete_entity_services: tuple[str, ...] = ("/delete_entity", "/gazebo/delete_entity")
+    set_entity_state_services: tuple[str, ...] = ("/set_entity_state", "/gazebo/set_entity_state")
 
     wait_each_service_sec: float = 2.0
 
@@ -158,9 +159,11 @@ class GazeboObstacleManager:
 
         self._spawn_cli: Any = None
         self._delete_cli: Any = None
+        self._set_entity_cli: Any = None
 
         self._spawn_disabled = False
         self._delete_disabled = False
+        self._set_entity_disabled = False
 
         self._spawned_names: list[str] = []
 
@@ -270,6 +273,86 @@ class GazeboObstacleManager:
         except Exception:
             self._spawned_names = []
 
+    def delete_entities(self, *, names: list[str]) -> None:
+        """
+        尽力删除一组实体名（忽略不存在/失败）。
+
+        目的：解决“上一轮进程遗留障碍物”导致新进程评估/训练一开局就碰撞的问题。
+        clear_spawned() 只能清理当前进程记录的 spawned_names；跨进程需要显式按名称清理。
+        """
+        self._resolve_clients()
+        if self._delete_cli is None:
+            return
+        try:
+            from gazebo_msgs.srv import DeleteEntity  # type: ignore[import-untyped]
+            import rclpy
+
+            for name in names:
+                req = DeleteEntity.Request()
+                req.name = str(name)
+                fut = self._delete_cli.call_async(req)
+                rclpy.spin_until_future_complete(self._node, fut, timeout_sec=1.0)
+        except Exception:
+            return
+
+    def _resolve_set_entity_client(self) -> None:
+        if self._set_entity_disabled or self._set_entity_cli is not None:
+            return
+        try:
+            from gazebo_msgs.srv import SetEntityState  # type: ignore[import-untyped]
+            import rclpy
+        except Exception:
+            self._set_entity_disabled = True
+            return
+
+        self._pump(12, 0.02)
+        for svc in self._cfg.set_entity_state_services:
+            cli = self._node.create_client(SetEntityState, svc)
+            t0 = time.time()
+            while time.time() - t0 < float(self._cfg.wait_each_service_sec):
+                if cli.service_is_ready():
+                    self._set_entity_cli = cli
+                    try:
+                        self._node.get_logger().info(f"已连接 Gazebo 服务: {svc}（SetEntityState，障碍位姿）")
+                    except Exception:
+                        pass
+                    return
+                self._pump(10, 0.02)
+            try:
+                self._node.destroy_client(cli)
+            except Exception:
+                pass
+        self._set_entity_disabled = True
+
+    def set_entity_pose(self, *, name: str, x: float, y: float, yaw: float) -> None:
+        """
+        用 ``SetEntityState`` 更新已生成实体在世界系下的位姿（用于动态障碍每步重定位）。
+        """
+        self._resolve_set_entity_client()
+        if self._set_entity_cli is None:
+            return
+        try:
+            from gazebo_msgs.msg import EntityState  # type: ignore[import-untyped]
+            from gazebo_msgs.srv import SetEntityState  # type: ignore[import-untyped]
+            import rclpy
+            from geometry_msgs.msg import Twist
+
+            z = float(self._cfg.obstacle_size_z) * 0.5 + 1e-3
+            st = EntityState()
+            st.name = str(name)
+            st.pose.position.x = float(x)
+            st.pose.position.y = float(y)
+            st.pose.position.z = float(z)
+            st.pose.orientation = _yaw_to_quat(float(yaw))
+            st.twist = Twist()
+            st.reference_frame = "world"
+            req = SetEntityState.Request()
+            req.state = st
+            fut = self._set_entity_cli.call_async(req)
+            rclpy.spin_until_future_complete(self._node, fut, timeout_sec=1.5)
+        except Exception:
+            return
+
     def spawn_static_boxes(self, *, obstacles: list[tuple[str, float, float, float]]) -> None:
         """
         obstacles: [(name, x, y, yaw), ...]
@@ -285,6 +368,10 @@ class GazeboObstacleManager:
                 size_xy=float(self._cfg.obstacle_size_xy),
                 size_z=float(self._cfg.obstacle_size_z),
             )
+            zc = max(
+                float(self._cfg.obstacle_z),
+                float(self._cfg.obstacle_size_z) * 0.5 + 1e-3,
+            )
             for (name, x, y, yaw) in obstacles:
                 req = SpawnEntity.Request()
                 req.name = str(name)
@@ -293,7 +380,7 @@ class GazeboObstacleManager:
                 p = Pose()
                 p.position.x = float(x)
                 p.position.y = float(y)
-                p.position.z = float(self._cfg.obstacle_z)
+                p.position.z = float(zc)
                 p.orientation = _yaw_to_quat(float(yaw))
                 req.initial_pose = p
                 fut = self._spawn_cli.call_async(req)

@@ -185,6 +185,18 @@ def displacement_progress_toward_goal(
     return float(dx * ux + dy * uy)
 
 
+def _axis_band_overlap_depth_m(*, x_robot: float, x_line: float, half_width_m: float) -> float:
+    """
+    将「线」近似为以 x_line 为中心、半宽 half_width_m 的带状区域；
+    返回车体 x 与该带重叠的深度（米），0 表示完全不在带内。
+    """
+    hw = max(float(half_width_m), 0.0)
+    if hw <= 0.0:
+        return 0.0
+    d = abs(float(x_robot) - float(x_line))
+    return float(max(0.0, hw - d))
+
+
 def compute_reward(
     *,
     lidar_ranges: np.ndarray,
@@ -203,6 +215,11 @@ def compute_reward(
     prev_action: Optional[Sequence[float]] = None,
     config: Optional[RewardConfig] = None,
     terminal: Optional[str] = None,
+    road_s: Optional[float] = None,
+    prev_road_s: Optional[float] = None,
+    road_cte: Optional[float] = None,
+    road_heading_error: Optional[float] = None,
+    in_road: Optional[bool] = None,
 ) -> RewardBreakdown:
     """
     Args:
@@ -265,6 +282,86 @@ def compute_reward(
             terminal=-float(cfg.out_of_bounds_penalty),
             components={"lidar_min_m": d_min, "lidar_front_min_m": d_front, "terminal": 1.0},
         )
+    if terminal == "out_of_road":
+        return RewardBreakdown(
+            total=-float(cfg.out_of_road_penalty),
+            progress=0.0,
+            direction=0.0,
+            safe=0.0,
+            risk=0.0,
+            turn=0.0,
+            stop=0.0,
+            smooth=0.0,
+            front_safe=0.0,
+            front_risk=0.0,
+            terminal=-float(cfg.out_of_road_penalty),
+            components={
+                "lidar_min_m": d_min,
+                "lidar_front_min_m": d_front,
+                "terminal": 1.0,
+                "in_road": 0.0 if (in_road is False) else 1.0,
+            },
+        )
+
+    # ---- road-following terms (optional) ----
+    r_road_prog = 0.0
+    r_road_cte = 0.0
+    r_road_heading = 0.0
+    if road_s is not None and prev_road_s is not None and float(cfg.k_road_progress) != 0.0:
+        ds = float(road_s) - float(prev_road_s)
+        r_road_prog = float(cfg.k_road_progress) * float(ds)
+    if road_cte is not None and float(cfg.k_road_cte) != 0.0:
+        r_road_cte = -float(cfg.k_road_cte) * abs(float(road_cte))
+    if road_heading_error is not None and float(cfg.k_road_heading) != 0.0:
+        r_road_heading = -float(cfg.k_road_heading) * abs(float(road_heading_error))
+
+    # ---- lane marking soft penalties (world-x bands; matches straight road worlds) ----
+    r_lane = 0.0
+    dep_yellow = 0.0
+    dep_white_l = 0.0
+    dep_white_r = 0.0
+    dep_div_l = 0.0
+    dep_div_r = 0.0
+    if robot_xy is not None:
+        xr = float(robot_xy[0])
+        if float(cfg.k_road_yellow_line) != 0.0:
+            hw_y = float(cfg.road_yellow_half_width_m)
+            dep_yellow = _axis_band_overlap_depth_m(
+                x_robot=xr, x_line=float(cfg.road_yellow_line_x_a), half_width_m=hw_y
+            ) + _axis_band_overlap_depth_m(
+                x_robot=xr, x_line=float(cfg.road_yellow_line_x_b), half_width_m=hw_y
+            )
+            r_lane -= float(cfg.k_road_yellow_line) * float(dep_yellow)
+        if float(cfg.k_road_white_line) != 0.0:
+            dep_white_l = _axis_band_overlap_depth_m(
+                x_robot=xr,
+                x_line=float(cfg.road_white_edge_left_x),
+                half_width_m=float(cfg.road_white_half_width_m),
+            )
+            dep_white_r = _axis_band_overlap_depth_m(
+                x_robot=xr,
+                x_line=float(cfg.road_white_edge_right_x),
+                half_width_m=float(cfg.road_white_half_width_m),
+            )
+            r_lane -= float(cfg.k_road_white_line) * float(max(dep_white_l, dep_white_r))
+        if float(cfg.k_road_lane_divider) != 0.0:
+            dep_div_l = _axis_band_overlap_depth_m(
+                x_robot=xr,
+                x_line=float(cfg.road_lane_divider_left_x),
+                half_width_m=float(cfg.road_lane_divider_half_width_m),
+            )
+            dep_div_r = _axis_band_overlap_depth_m(
+                x_robot=xr,
+                x_line=float(cfg.road_lane_divider_right_x),
+                half_width_m=float(cfg.road_lane_divider_half_width_m),
+            )
+            r_lane -= float(cfg.k_road_lane_divider) * float(max(dep_div_l, dep_div_r))
+
+    r_reverse = 0.0
+    if float(cfg.k_reverse) != 0.0:
+        veps = max(float(cfg.reverse_v_eps), 0.0)
+        if v < -veps:
+            r_reverse = -float(cfg.k_reverse) * float(-v - veps)
 
     if (
         cfg.use_displacement_progress
@@ -330,6 +427,11 @@ def compute_reward(
         + r_front_risk
         + r_front_close
         + r_detour
+        + r_road_prog
+        + r_road_cte
+        + r_road_heading
+        + r_lane
+        + r_reverse
         + r_turn
         + r_stop
         + r_smooth
@@ -362,6 +464,18 @@ def compute_reward(
             "r_vdir": float(r_vdir),
             "reward_front_close": float(r_front_close),
             "reward_detour": float(r_detour),
+            "road_s": float(road_s) if road_s is not None else 0.0,
+            "road_cte": float(road_cte) if road_cte is not None else 0.0,
+            "road_heading_error": float(road_heading_error) if road_heading_error is not None else 0.0,
+            "reward_road_progress": float(r_road_prog),
+            "reward_road_cte": float(r_road_cte),
+            "reward_road_heading": float(r_road_heading),
+            "reward_lane_markings": float(r_lane),
+            "lane_dep_yellow_m": float(dep_yellow),
+            "lane_dep_white_max_m": float(max(dep_white_l, dep_white_r)),
+            "lane_dep_divider_max_m": float(max(dep_div_l, dep_div_r)),
+            "reward_reverse": float(r_reverse),
+            "in_road": 0.0 if (in_road is False) else 1.0,
         },
     )
 

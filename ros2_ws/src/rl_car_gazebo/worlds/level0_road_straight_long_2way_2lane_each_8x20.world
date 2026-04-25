@@ -1,0 +1,139 @@
+<?xml version="1.0" ?>
+<!--
+  Level0 Road (8×20): long straight road, two-way, TWO lanes EACH direction (4 lanes total).
+  - Curbs are physical (collision + visual): LiDAR can perceive road boundaries.
+  - Markings are visual only: double yellow center lines, white edge lines, and lane divider lines.
+  - Spawn/goal markers placed on the outer right lane (keep-right convention, driving +Y).
+-->
+<sdf version="1.6">
+  <world name="level0_road_straight_long_2way_2lane_each_8x20">
+    <gravity>0 0 -9.8</gravity>
+    <physics type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+
+    <plugin name="gazebo_ros_state" filename="libgazebo_ros_state.so">
+      <update_rate>50.0</update_rate>
+    </plugin>
+
+    <include><uri>model://sun</uri></include>
+    <include><uri>model://ground_plane</uri></include>
+
+    <!-- ===== Outer walls for 8×20 arena (inner boundary roughly x∈[0,8], y∈[0,20]) ===== -->
+    <!-- Wall thickness=0.12, height=0.7 -->
+    <model name="a820_wall_south"><static>true</static><pose>4.0 -0.06 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>8.24 0.12 0.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>8.24 0.12 0.7</size></box></geometry></visual>
+      </link>
+    </model>
+    <model name="a820_wall_north"><static>true</static><pose>4.0 20.06 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>8.24 0.12 0.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>8.24 0.12 0.7</size></box></geometry></visual>
+      </link>
+    </model>
+    <model name="a820_wall_west"><static>true</static><pose>-0.06 10.0 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.12 20.24 0.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.12 20.24 0.7</size></box></geometry></visual>
+      </link>
+    </model>
+    <model name="a820_wall_east"><static>true</static><pose>8.06 10.0 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.12 20.24 0.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.12 20.24 0.7</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <!-- ===== Road geometry (center x=4.0) ===== -->
+    <!-- Total carriageway width = 3.0m (half width 1.5m). Two lanes each side => lane width 0.75m. -->
+    <!-- Curbs: width 0.10m, height 0.08m. Length 19.8m (y from 0.1 to 19.9). -->
+    <!-- Curbs at x = 4 ± 1.5 = 2.5, 5.5 -->
+    <model name="road4_curb_left"><static>true</static><pose>2.50 10.00 0.04 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.10 19.80 0.08</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.10 19.80 0.08</size></box></geometry>
+          <material><ambient>0.55 0.55 0.55 1</ambient><diffuse>0.65 0.65 0.65 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="road4_curb_right"><static>true</static><pose>5.50 10.00 0.04 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.10 19.80 0.08</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.10 19.80 0.08</size></box></geometry>
+          <material><ambient>0.55 0.55 0.55 1</ambient><diffuse>0.65 0.65 0.65 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Edge lines (visual only), slightly inside curbs -->
+    <model name="road4_edge_white_left"><static>true</static><pose>2.57 10.00 0.005 0 0 0</pose>
+      <link name="link">
+        <visual name="v">
+          <geometry><box><size>0.06 19.80 0.01</size></box></geometry>
+          <material><ambient>0.90 0.90 0.90 1</ambient><diffuse>0.98 0.98 0.98 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="road4_edge_white_right"><static>true</static><pose>5.43 10.00 0.005 0 0 0</pose>
+      <link name="link">
+        <visual name="v">
+          <geometry><box><size>0.06 19.80 0.01</size></box></geometry>
+          <material><ambient>0.90 0.90 0.90 1</ambient><diffuse>0.98 0.98 0.98 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Double yellow center lines (visual only) -->
+    <model name="road4_center_yellow_a"><static>true</static><pose>3.97 10.00 0.005 0 0 0</pose>
+      <link name="link">
+        <visual name="v">
+          <geometry><box><size>0.04 19.80 0.01</size></box></geometry>
+          <material><ambient>0.90 0.75 0.05 1</ambient><diffuse>0.95 0.82 0.10 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="road4_center_yellow_b"><static>true</static><pose>4.03 10.00 0.005 0 0 0</pose>
+      <link name="link">
+        <visual name="v">
+          <geometry><box><size>0.04 19.80 0.01</size></box></geometry>
+          <material><ambient>0.90 0.75 0.05 1</ambient><diffuse>0.95 0.82 0.10 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Lane divider lines between the two lanes of each direction (visual only) -->
+    <!-- Left side (southbound) divider at x = 4 - 0.75 = 3.25 -->
+    <model name="road4_lane_div_left"><static>true</static><pose>3.25 10.00 0.005 0 0 0</pose>
+      <link name="link">
+        <visual name="v">
+          <geometry><box><size>0.03 19.80 0.01</size></box></geometry>
+          <material><ambient>0.90 0.90 0.90 1</ambient><diffuse>0.98 0.98 0.98 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <!-- Right side (northbound) divider at x = 4 + 0.75 = 4.75 -->
+    <model name="road4_lane_div_right"><static>true</static><pose>4.75 10.00 0.005 0 0 0</pose>
+      <link name="link">
+        <visual name="v">
+          <geometry><box><size>0.03 19.80 0.01</size></box></geometry>
+          <material><ambient>0.90 0.90 0.90 1</ambient><diffuse>0.98 0.98 0.98 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Spawn/goal markers on the OUTER right lane center (x = 4 + 1.125 = 5.125) -->
+    <model name="road4_start_marker"><static>true</static><pose>5.125 2.0 0.01 0 0 0</pose>
+      <link name="link"><visual name="visual"><geometry><cylinder><radius>0.30</radius><length>0.02</length></cylinder></geometry>
+        <material><ambient>0.1 0.8 0.1 1</ambient><diffuse>0.1 0.9 0.1 1</diffuse></material></visual></link></model>
+    <model name="road4_goal_marker"><static>true</static><pose>5.125 18.0 0.01 0 0 0</pose>
+      <link name="link"><visual name="visual"><geometry><cylinder><radius>0.30</radius><length>0.02</length></cylinder></geometry>
+        <material><ambient>0.85 0.1 0.1 1</ambient><diffuse>0.95 0.1 0.1 1</diffuse></material></visual></link></model>
+
+    <gui fullscreen="0"><camera name="user_camera"><pose>4 -18 18 0 0.55 1.57</pose></camera></gui>
+  </world>
+</sdf>
+

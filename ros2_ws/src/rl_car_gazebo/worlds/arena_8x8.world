@@ -1,7 +1,7 @@
 <?xml version="1.0" ?>
 <!--
   8m×8m 训练/展示场地（内沿约 x,y ∈ [0,8]）。
-  起点 (1,1)、终点 (7,7)；随机障碍由外部 SpawnEntity 注入（见 demo_random_obstacles.py）。
+  起点 (1,1)、终点 (7,7)；随机障碍由外部 SpawnEntity 注入（见项目根目录 demo_obstacles.py）。
 -->
 <sdf version="1.6">
   <world name="arena_8x8">

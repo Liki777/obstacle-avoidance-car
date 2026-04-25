@@ -15,7 +15,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from typing import Any, Mapping
 
 from obstacle_environment.action.action_config import ActionConfig
 from obstacle_environment.observation.state_config import ObservationConfig
@@ -38,6 +39,21 @@ class RobotTaskSpec:
     def action_dim(self) -> int:
         return int(self.action_config.action_dim)
 
+    def to_snapshot_dict(self) -> dict[str, Any]:
+        """供多进程 worker 复刻同一套 obs/action/reward 规格（可 JSON/pickle 友好）。"""
+        return {
+            "observation_config": asdict(self.observation_config),
+            "action_config": asdict(self.action_config),
+            "reward_config": asdict(self.reward_config),
+        }
+
+    @classmethod
+    def from_snapshot_dict(cls, d: Mapping[str, Any]) -> "RobotTaskSpec":
+        obs = ObservationConfig(**dict(d.get("observation_config") or {}))
+        act = ActionConfig(**dict(d.get("action_config") or {}))
+        rcfg = RewardConfig(**dict(d.get("reward_config") or {}))
+        return cls(observation_config=obs, action_config=act, reward_config=rcfg)
+
     @classmethod
     def preset_diff_drive(
         cls,
@@ -45,6 +61,8 @@ class RobotTaskSpec:
         lidar_dim: int = 15,
         include_camera: bool = False,
         camera_feature_dim: int = 0,
+        include_road: bool = False,
+        road_lookahead_n: int = 5,
         input_is_normalized: bool = True,
         reward_config: RewardConfig | None = None,
         linear_x_min: float | None = None,
@@ -65,6 +83,8 @@ class RobotTaskSpec:
                 lidar_reduce="min",
                 include_camera=include_camera,
                 camera_feature_dim=camera_feature_dim,
+                include_road=bool(include_road),
+                road_lookahead_n=int(road_lookahead_n),
             ),
             action_config=ActionConfig(
                 linear_x_min=lx_lo,

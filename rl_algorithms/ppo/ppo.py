@@ -154,6 +154,23 @@ class PPOTrainer:
                     terminated = bool(info.get("terminated", False)) if isinstance(info, dict) else False
                     truncated = bool(info.get("truncated", False)) if isinstance(info, dict) else False
                     reason = str(info.get("terminal_reason", "")) if isinstance(info, dict) else ""
+                    if isinstance(info, dict):
+                        dmin_i = float(info.get("lidar_min_m", 0.0))
+                        gd_i = float(info.get("goal_distance", 0.0))
+                        oob_i = info.get("oob_position_xy")
+                    else:
+                        dmin_i = 0.0
+                        gd_i = 0.0
+                        oob_i = None
+                    reason_disp = reason or ("truncated" if truncated else "")
+                    oob_s = "" if oob_i is None else f" oob={oob_i}"
+                    print(
+                        f"[episode] return={float(ep_ret):.4f} steps={int(cur_ep_len)} "
+                        f"reason={reason_disp or 'n/a'} terminated={terminated} truncated={truncated} "
+                        f"dmin={dmin_i:.3f} goal_d={gd_i:.3f}{oob_s}",
+                        flush=True,
+                    )
+
                     if truncated and (not terminated):
                         term_counts["truncated"] += 1
                     else:

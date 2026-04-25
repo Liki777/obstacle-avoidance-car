@@ -87,6 +87,28 @@ def _run_eval(*, model: str, task: str, passthrough: list[str]) -> int:
         sys.argv = old
 
 
+def _run_show(passthrough: list[str]) -> int:
+    """启动 Gazebo 地图（与 show_map.py 一致）。"""
+    proj = Path(__file__).resolve().parent
+    root = str(proj)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    import show_map
+
+    return int(show_map.main(_normalize_passthrough(passthrough)))
+
+
+def _run_demo(passthrough: list[str]) -> int:
+    """课程障碍演示（与 demo_obstacles.py 一致）。"""
+    proj = Path(__file__).resolve().parent
+    root = str(proj)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    import demo_obstacles
+
+    return int(demo_obstacles.main(_normalize_passthrough(passthrough)))
+
+
 def _run_smoke(argv: list[str]) -> int:
     """
     内置冒烟测试：验证 ROS2 topic 连通性并发布 cmd_vel。
@@ -166,15 +188,21 @@ def _run_smoke(argv: list[str]) -> int:
 
 def main() -> int:
     if len(sys.argv) < 2:
-        raise SystemExit("用法: python3 run.py {train,eval,smoke} ...")
+        raise SystemExit(
+            "用法: python3 run.py {train,eval,show,demo,smoke} ...\n"
+            "  show  → 同 show_map.py（推荐：run.py show --level 1）\n"
+            "  demo  → 同 demo_obstacles.py（障碍演示）"
+        )
 
     cmd = sys.argv[1]
     if cmd in ("-h", "--help"):
         print(
             "用法:\n"
-            "  python3 run.py train ...\n"
-            "  python3 run.py eval ...\n"
-            "  python3 run.py smoke ..."
+            "  python3 run.py train ...      # 转发 rl_algorithms.train_ppo\n"
+            "  python3 run.py eval ...       # 评估 checkpoint\n"
+            "  python3 run.py show ...       # 转发 show_map.py（Gazebo 地图）\n"
+            "  python3 run.py demo ...       # 转发 demo_obstacles.py（课程障碍演示）\n"
+            "  python3 run.py smoke ...      # ROS 连通性冒烟"
         )
         return 0
 
@@ -182,13 +210,22 @@ def main() -> int:
         p_train = argparse.ArgumentParser(prog="run.py train", description="训练入口（转发 rl_algorithms.train_ppo）")
         p_train.add_argument("--model", type=str, default="ppo", help="模型/算法（目前仅 ppo）")
         p_train.add_argument("--task", type=str, default="mock", help="环境（mock 或 gazebo）")
-        p_train.add_argument("--level", type=int, default=None, help="课程阶段（转发给 train_ppo）")
+        p_train.add_argument(
+            "--level",
+            type=int,
+            default=None,
+            help="课程 0~5（转发 train_ppo；0 无障碍…5 随机静+动）",
+        )
         p_train.add_argument("--total-updates", type=int, default=None, help="PPO update 次数（转发）")
         p_train.add_argument("--rollout-steps", type=int, default=None, help="每次 rollout 步数（转发）")
         p_train.add_argument("--device", type=str, default=None, help="cpu/cuda（转发）")
         p_train.add_argument("--save", type=str, default=None, help="checkpoint 保存路径（转发）")
         p_train.add_argument("--load", type=str, default=None, help="checkpoint 加载路径（转发）")
-        p_train.add_argument("--auto-resume", action="store_true", help="若 save 已存在则自动加载（转发）")
+        p_train.add_argument(
+            "--auto-resume",
+            action="store_true",
+            help="未指定 --load 且 save 已存在则从该路径续训；load==save 时开训备份→checkpoint{N}.pt；转发 train_ppo",
+        )
         p_train.add_argument("--no-auto-prev-load", action="store_true", help="关闭 level 级联自动加载（转发）")
         p_train.add_argument("--seed", type=int, default=None, help="随机种子（转发）")
         p_train.add_argument(
@@ -245,9 +282,15 @@ def main() -> int:
         p_ev.add_argument("--model", type=str, default="ppo", help="目前仅 ppo")
         p_ev.add_argument("--task", type=str, default="gazebo", help="mock 或 gazebo")
         p_ev.add_argument("--load", type=str, default=None, help="权重路径；省略则尝试 checkpoints/level{N}/latest.pt")
-        p_ev.add_argument("--level", type=int, default=None, help="课程阶段（与默认 checkpoint 路径一致）")
+        p_ev.add_argument("--level", type=int, default=None, help="课程 0~5（与 checkpoints/level{N} 一致）")
         p_ev.add_argument("--episodes", type=int, default=10, help="评估回合数")
-        p_ev.add_argument("--stochastic", action="store_true", help="评估时随机采样动作（默认关闭）")
+        p_ev.add_argument(
+            "--stochastic",
+            "--eval-stochastic",
+            action="store_true",
+            dest="stochastic",
+            help="评估时随机采样动作（默认关闭；--eval-stochastic 与之等价）",
+        )
         p_ev.add_argument("--device", type=str, default=None, help="cpu/cuda（转发）")
         p_ev.add_argument("--save", type=str, default=None, help="与 --auto-resume 联用（转发）")
         p_ev.add_argument("--auto-resume", action="store_true", help="若无 --load 且 save 上已有权重则加载（转发）")
@@ -305,10 +348,16 @@ def main() -> int:
         rest = _strip_conflicting_flags(_normalize_passthrough(unknown), conflict_flags=conflict)
         return _run_eval(model=e_args.model, task=e_args.task, passthrough=forward + rest)
 
+    if cmd == "show":
+        return _run_show(sys.argv[2:])
+
+    if cmd == "demo":
+        return _run_demo(sys.argv[2:])
+
     if cmd == "smoke":
         return _run_smoke(sys.argv[2:])
 
-    raise SystemExit(f"未知子命令: {cmd!r}（支持 train / eval / smoke）")
+    raise SystemExit(f"未知子命令: {cmd!r}（支持 train / eval / show / demo / smoke）")
 
 
 if __name__ == "__main__":

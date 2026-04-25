@@ -66,12 +66,109 @@ class RewardConfig:
     success_reward: float = 100.0
     collision_penalty: float = 100.0
     out_of_bounds_penalty: float = 50.0
+    out_of_road_penalty: float = 60.0
+
+    # ---- 道路跟随（可选）：若启用，将用 Δs 替代/补充目标 progress ----
+    k_road_progress: float = 0.0
+    k_road_cte: float = 0.0
+    k_road_heading: float = 0.0
+    # ---- 车道标线惩罚（可选，需 env 传入 robot_xy 与道路几何参数）----
+    k_road_yellow_line: float = 0.0
+    """压双黄实线区域（靠近道路中心 x_center）惩罚权重。"""
+    k_road_white_line: float = 0.0
+    """压白边线区域惩罚权重（应明显小于黄线，允许必要时短暂跨线避障）。"""
+    k_road_lane_divider: float = 0.0
+    """压车道分隔线（同向两车道之间）惩罚权重（介于黄/白之间）。"""
+    road_x_center: float = 4.0
+    road_yellow_line_x_a: float = 3.97
+    road_yellow_line_x_b: float = 4.03
+    road_yellow_half_width_m: float = 0.02
+    road_white_half_width_m: float = 0.03
+    road_lane_divider_half_width_m: float = 0.015
+    road_white_edge_left_x: float = 2.57
+    road_white_edge_right_x: float = 5.43
+    road_lane_divider_left_x: float = 3.25
+    road_lane_divider_right_x: float = 4.75
+    # ---- 倒车惩罚（用车体前向速度 linear_x）----
+    k_reverse: float = 0.0
+    reverse_v_eps: float = 0.02
 
     def __post_init__(self) -> None:
         if self.collision_distance >= self.safe_distance:
             raise ValueError("collision_distance 必须小于 safe_distance")
         if self.risk_eps <= 0:
             raise ValueError("risk_eps 必须 > 0")
+
+    @staticmethod
+    def stage2_level1_corridor() -> "RewardConfig":
+        """
+        Level1 九宫格混合静障：在 ``stage2_simple_avoid`` 基础上略提高进度/朝向权重、略降低转弯惩罚，
+        便于在 1.5 m 格距走廊中连续绕行，同时保留前向扇区安全项。
+        """
+        return RewardConfig(
+            k_progress=0.32,
+            k_direction=0.38,
+            k_velocity_direction=0.42,
+            k_behind_goal=0.45,
+            k_safe=0.62,
+            k_risk=0.38,
+            k_front_safe=0.22,
+            k_front_risk=0.34,
+            k_turn=0.55,
+            k_stop=0.08,
+            k_smooth=0.015,
+            k_front_close_penalty=1.55,
+            front_close_penalty_margin_m=0.72,
+            front_sector_half_width_rad=0.52,
+            collision_distance=0.19,
+            safe_distance=0.56,
+            success_reward=85.0,
+            collision_penalty=85.0,
+        )
+
+    @staticmethod
+    def stage0_road_follow() -> "RewardConfig":
+        """Level0 道路行驶：主要看 Δs 前进，不强拉“中心线”，重点是不轻易跨黄线/车道分隔白线。"""
+        return RewardConfig(
+            # disable goal-centric shaping (use road instead)
+            k_progress=0.0,
+            k_direction=0.0,
+            k_velocity_direction=0.0,
+            k_behind_goal=0.0,
+            k_lateral_detour=0.0,
+            k_front_safe=0.0,
+            k_front_risk=0.0,
+            # road terms
+            k_road_progress=3.2,
+            # 不用 cte/heading 去“拉线”，否则会与标线惩罚打架（尤其双黄线在道路中间）
+            k_road_cte=0.05,
+            k_road_heading=0.05,
+            # lane markings (soft penalties)
+            # 这里的 half_width 不是“视觉线宽”，而是“禁止轻易跨线”的缓冲带宽度（越过越深罚越大）
+            k_road_yellow_line=3.0,
+            k_road_white_line=0.25,
+            k_road_lane_divider=2.0,
+            # discourage reversing in normal driving
+            k_reverse=1.2,
+            reverse_v_eps=0.02,
+            # gentle control regularization
+            k_turn=0.05,
+            k_stop=0.25,
+            k_smooth=0.01,
+            # thresholds
+            collision_distance=0.16,
+            safe_distance=0.55,
+            goal_reached_distance=0.35,
+            # terminal
+            success_reward=60.0,
+            collision_penalty=70.0,
+            out_of_bounds_penalty=40.0,
+            out_of_road_penalty=70.0,
+            # buffers (m)
+            road_yellow_half_width_m=0.18,
+            road_white_half_width_m=0.10,
+            road_lane_divider_half_width_m=0.14,
+        )
 
     @staticmethod
     def stage2_simple_avoid() -> "RewardConfig":
@@ -89,7 +186,7 @@ class RewardConfig:
             k_stop=0.08,
             k_smooth=0.01,
             front_sector_half_width_rad=0.52,
-            collision_distance=0.35,
+            collision_distance=0.2,
             safe_distance=0.58,
             success_reward=80.0,
             collision_penalty=80.0,

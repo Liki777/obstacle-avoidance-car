@@ -33,9 +33,17 @@ from sensor_msgs.msg import Image, LaserScan
 from obstacle_environment.action.action_mapper import ActionMapper
 from obstacle_environment.observation import ObservationConfig, build_observation
 from obstacle_environment.reward import compute_reward, lidar_front_min_range, lidar_min_range
+from obstacle_environment.reward.reward_computer import _finite_non_saturating
 from obstacle_environment.robot_spec import RobotTaskSpec
 from obstacle_environment.scenario_manager import GazeboObstacleManager, GazeboObstacleManagerConfig
 from obstacle_environment.world_generator import StaticObstacleSamplingConfig, sample_static_obstacles
+from obstacle_environment.world_generator.dynamic_obstacle_presets import (
+    DynamicObstacleSpec,
+    builtin_fixed_dynamic_specs,
+    builtin_level1_fixed_mixed_3x3,
+    pose_at_time,
+    sample_random_dynamic_specs,
+)
 
 
 def _image_msg_to_numpy(msg: Image) -> np.ndarray:
@@ -124,6 +132,23 @@ class GazeboEnvConfig:
     done_on_collision: bool = True
     done_on_goal: bool = True
     done_on_out_of_bounds: bool = True
+    # 终止用「前向扇区」裕量：仅用于车头 ±front_sector 内最近距 d_front（见 step 内 lidar_front_min）。
+    # 真实蹭墙时往往是前向读数偏小；若把同一裕量用到全向 min(dmin)，侧身掠过障碍时侧向射线仍 ~0.30m
+    # 会误触发 collision（肉眼已过、日志 dmin≈0.30）。
+    collision_done_extra_margin_m: float = 0.14
+    # 全向最近距（非饱和射线 min）在 collision_distance 上再加一小段：覆盖侧向刮擦，又避免 0.30m 级「擦边通过」误判
+    collision_done_global_small_margin_m: float = 0.055
+    # 激光未可靠命中墙体（例如全向开阔但物理已卡住）时的兜底：持续前进指令 + 里程计几乎不动 + 周向最近距足够近
+    done_on_cmd_velocity_stuck: bool = True
+    stuck_cmd_linear_min: float = 0.06
+    stuck_odom_linear_max: float = 0.028
+    # 卡死判据：全向最近距 ≤ 该值（米）时认为近障，配合「有前进指令但里程计不动」
+    stuck_lidar_max_m: float = 0.72
+    stuck_consecutive_steps: int = 8
+    # 另一种卡死兜底：位置几乎不动（更适合“贴路沿石/墙体挤住但雷达不一定足够近”的情况）
+    stuck_pos_eps_m: float = 0.004
+    """若连续若干步位移 < eps 且有前进指令，则判定卡死。"""
+    stuck_pos_consecutive_steps: int = 6
     # 基于 maze.world（Maze-Map）外墙中心点推断的训练边界（单位：m，world 坐标）
     # 墙中心大致落在 x∈[0,10], y∈[-1,9]，这里加一点裕量避免贴墙误判
     map_x_min: float = -0.5
@@ -179,6 +204,26 @@ class GazeboEnvConfig:
     reset_settle_time: float = 0.25
     """重置模型后等待传感器稳定的时间 (s)。"""
 
+    debug_reset: bool = False
+    """True：每次 reset 打印重置路径与位姿偏差（用于验证 reset 是否真的生效）。"""
+
+    # ---- Road-following task (Level0 road) ----
+    road_map_yaml: str = ""
+    """道路中心线配置（YAML 路径）。留空表示不启用道路特征/道路奖励。"""
+    road_half_width_m: float = 0.65
+    """道路半宽（用于 out-of-road 判定）。若 YAML 内提供 half_width_m 会覆盖此值。"""
+    road_lookahead_n: int = 5
+    road_lookahead_ds: float = 0.8
+    road_out_margin_m: float = 0.05
+    done_on_out_of_road: bool = True
+    out_of_road_penalty: float = 60.0
+    done_on_road_end: bool = True
+    road_success_s_margin_m: float = 0.8
+    # 与 Gazebo world 里平面 goal marker（绿圈）几何对齐：用车体 world 位姿到 (goal_x,goal_y) 判 success
+    done_on_world_goal: bool = False
+    world_goal_success_radius_m: float = 0.40
+    """world 平面 dist(车体, goal) ≤ 该值则 terminal_reason=success（常见 marker 半径 0.30，略留裕量）。"""
+
     wait_ready_timeout_sec: float = 45.0
     """reset 后等待 /scan、/odom、/goal_pose 就绪的最长时间。PPO update 阶段不 spin 时易积压，10s 常不够。"""
 
@@ -204,17 +249,30 @@ class GazeboEnvConfig:
     linear_cmd_sigmoid_k: float = 8.0
     linear_cmd_sigmoid_mid_m: float = 0.45
 
-    # ---- Level1：随机静态障碍（可选）----
-    enable_level1_static_obstacles: bool = False
+    # ---- 静态障碍（课程 Level0/1/2；与 map_design_document 一致）----
+    # ``none`` | ``fixed`` | ``random``；若仍设置 ``enable_level1_static_obstacles=True`` 且本字段为 ``none``，环境内会退化为 ``random``（兼容旧入口）。
+    static_obstacle_mode: str = "none"
+    fixed_static_obstacles_xyyaw: tuple[tuple[float, float, float], ...] = ()
     static_obstacle_count_min: int = 3
     static_obstacle_count_max: int = 5
     static_obstacle_min_dist_to_robot: float = 1.5
     static_obstacle_min_dist_to_goal: float = 1.5
     static_obstacle_min_dist_between: float = 1.0
     static_obstacle_name_prefix: str = "train_obstacle"
-    # Gazebo spawn/delete 服务名候选（classic）
+    enable_level1_static_obstacles: bool = False
+    """兼容旧版：等价于 ``static_obstacle_mode="random"``（当 mode 仍为 none 时）。"""
+
+    # ---- 动态障碍（Level3/4/5）：每步 SetEntityState 更新位姿 ----
+    dynamic_obstacle_mode: str = "none"
+    """``none`` | ``fixed`` | ``random``。"""
+    dynamic_obstacle_count_min: int = 1
+    dynamic_obstacle_count_max: int = 2
+    dynamic_obstacle_name_prefix: str = "train_dyn"
+
+    # Gazebo spawn/delete/set 服务名候选（classic）
     spawn_entity_services: tuple[str, ...] = ("/spawn_entity", "/gazebo/spawn_entity")
     delete_entity_services: tuple[str, ...] = ("/delete_entity", "/gazebo/delete_entity")
+    set_entity_state_services: tuple[str, ...] = ("/set_entity_state", "/gazebo/set_entity_state")
 
 
 class _RlCarGymNode(Node):
@@ -226,7 +284,9 @@ class _RlCarGymNode(Node):
         cfg: GazeboEnvConfig,
         obs_cfg: ObservationConfig,
     ) -> None:
-        super().__init__("rl_car_gym_env")
+        # 并行训练/多进程或重复创建环境时，固定节点名会触发 rcl.logging_rosout
+        # “Publisher already registered for provided node name” 警告。使用 pid 生成唯一名可避免。
+        super().__init__(f"rl_car_gym_env_{os.getpid()}")
         self._cfg = cfg
         self._obs_cfg = obs_cfg
 
@@ -305,7 +365,7 @@ class _RlCarGymNode(Node):
             out.append("camera")
         return out
 
-    def build_observation(self) -> dict[str, Any]:
+    def build_observation(self, *, road_data: Any = None) -> dict[str, Any]:
         if self._scan is None or self._odom is None or self._goal is None:
             raise RuntimeError("传感器或目标未就绪，请确认 Gazebo 与话题正常。")
         ranges = np.asarray(self._scan.ranges, dtype=np.float32)
@@ -318,6 +378,7 @@ class _RlCarGymNode(Node):
             camera_data=cam,
             odom_data=self._odom,
             goal_data=goal_data,
+            road_data=road_data,
             config=self._obs_cfg,
         )
 
@@ -366,6 +427,11 @@ class RlCarGazeboEnv:
         self._goal_reached_for_bonus = False
         self._prev_action: Optional[np.ndarray] = None
         self._episode_idx = 0
+        self._collision_stuck_steps = 0
+        self._stuck_pos_steps = 0
+        self._road_map = None
+        self._prev_road_s: Optional[float] = None
+        self._road_s_end: Optional[float] = None
 
         # ---- step 日志（可选）----
         self._step_log_f = None
@@ -417,11 +483,14 @@ class RlCarGazeboEnv:
 
         self._set_model_client: Any = None
         self._set_entity_client: Any = None
+        self._set_entity_service_name: str = ""
+        self._set_model_service_name: str = ""
         self._get_model_state_client: Any = None
         self._get_entity_state_client: Any = None
         self._reset_world_client: Any = None
         self._gazebo_msgs_ok = False
         self._set_model_resolve_warned = False
+        self._set_entity_resolve_warned = False
         self._disable_set_model_resolution = False
         self._disable_set_entity_resolution = False
         self._disable_get_model_state_resolution = False
@@ -463,14 +532,25 @@ class RlCarGazeboEnv:
                 except Exception:
                     pass
 
-        # ---- 障碍物场景管理器（可选）----
+        # ---- 障碍物场景管理器（静态 / 动态 spawn 与动态位姿更新）----
         self._obstacle_mgr: GazeboObstacleManager | None = None
-        if bool(self.env_cfg.enable_level1_static_obstacles):
+        self._dynamic_specs: list[DynamicObstacleSpec] = []
+        self._dynamic_episode_t: float = 0.0
+
+        st_mode = str(self.env_cfg.static_obstacle_mode).strip().lower()
+        if bool(self.env_cfg.enable_level1_static_obstacles) and st_mode in ("", "none"):
+            st_mode = "random"
+        dyn_mode = str(self.env_cfg.dynamic_obstacle_mode).strip().lower()
+        need_obstacle_mgr = (st_mode in ("fixed", "random")) or (dyn_mode == "fixed") or (
+            dyn_mode == "random" and int(self.env_cfg.dynamic_obstacle_count_max) > 0
+        )
+        if need_obstacle_mgr:
             self._obstacle_mgr = GazeboObstacleManager(
                 node=self._node,
                 cfg=GazeboObstacleManagerConfig(
                     spawn_entity_services=tuple(self.env_cfg.spawn_entity_services),
                     delete_entity_services=tuple(self.env_cfg.delete_entity_services),
+                    set_entity_state_services=tuple(self.env_cfg.set_entity_state_services),
                 ),
             )
 
@@ -544,9 +624,8 @@ class RlCarGazeboEnv:
                 seen.add(s)
                 candidates.append(s)
 
-        if len(discovered) == 0:
-            # 图中完全没有该类型服务：当前运行通常不支持，直接禁用后续重复探测
-            self._disable_set_model_resolution = True
+        if not candidates:
+            # 启动早期可能尚未注册完成；后续 reset 仍会重试
             return False
 
         wait_each = float(self.env_cfg.set_model_state_wait_sec)
@@ -556,6 +635,7 @@ class RlCarGazeboEnv:
             while time.time() - t0 < wait_each:
                 if cli.service_is_ready():
                     self._set_model_client = cli
+                    self._set_model_service_name = str(svc)
                     self._node.get_logger().info(f"已连接 Gazebo 服务: {svc}（SetModelState）")
                     return True
                 self._pump(15, 0.02)
@@ -571,9 +651,8 @@ class RlCarGazeboEnv:
                 f"{list(self.env_cfg.set_model_state_services)}）。"
                 " 若只有 /get_model_list：请执行 `ros2 service list | grep -i set` 或 `ros2 service list | grep gazebo`，"
                 " 确认 gzserver 是否提供 SetModelState；Classic 下需 gazebo_ros 正常加载。"
-                " 将跳过位姿重置（小车从当前位置继续训练）。"
+                " 将改用 SetEntityState（若可用）；若两者都不可用，才会跳过位姿重置。"
             )
-        self._disable_set_model_resolution = True
         return False
 
     def _resolve_set_entity_client(self) -> bool:
@@ -597,6 +676,10 @@ class RlCarGazeboEnv:
                 seen.add(s)
                 candidates.append(s)
 
+        if not candidates:
+            # 启动早期可能尚未注册完成，允许后续重试
+            return False
+
         wait_each = float(self.env_cfg.set_model_state_wait_sec)
         for svc in candidates:
             cli = self._node.create_client(SetEntityState, svc)
@@ -604,6 +687,7 @@ class RlCarGazeboEnv:
             while time.time() - t0 < wait_each:
                 if cli.service_is_ready():
                     self._set_entity_client = cli
+                    self._set_entity_service_name = str(svc)
                     self._node.get_logger().info(f"已连接 Gazebo 服务: {svc}（SetEntityState）")
                     return True
                 self._pump(15, 0.02)
@@ -611,7 +695,13 @@ class RlCarGazeboEnv:
                 self._node.destroy_client(cli)
             except Exception:
                 pass
-        self._disable_set_entity_resolution = True
+        if not getattr(self, "_set_entity_resolve_warned", False):
+            self._set_entity_resolve_warned = True
+            self._node.get_logger().warn(
+                "未发现类型为 gazebo_msgs/srv/SetEntityState 的服务（已尝试自动发现 + "
+                f"{list(self.env_cfg.set_entity_state_services)}）。将无法通过服务重置位姿（将尝试 /reset_world 或仅停车继续）。"
+            )
+        # 不永久禁用：服务可能在 Gazebo 完全启动后才出现
         return False
 
     def _call_set_model_state(self, yaw: Optional[float] = None) -> bool:
@@ -656,6 +746,14 @@ class RlCarGazeboEnv:
         except ImportError:
             return False
 
+        # 若实体还未 spawn（常见于 gzserver 启动后延迟 spawn），直接跳过，避免每次 reset 都刷失败警告
+        # 这里用 GetEntityState 做一次快速探测（2s 超时）。
+        try:
+            if self._get_world_xy_via_get_entity_state() is None:
+                return False
+        except Exception:
+            pass
+
         yaw_use = float(self.env_cfg.spawn_yaw) if yaw is None else float(yaw)
         st = EntityState()
         st.name = self.env_cfg.model_name
@@ -674,8 +772,14 @@ class RlCarGazeboEnv:
         if res is None:
             return False
         if hasattr(res, "success") and not res.success:
+            msg = str(getattr(res, "status_message", "") or "").strip()
+            svc = str(getattr(self, "_set_entity_service_name", "") or "").strip()
+            extra = f" service={svc}" if svc else ""
+            # 有些版本 status_message 为空；至少把 entity 名与目标 pose 打出来，便于定位“实体不存在/名字不对/服务不对”
             self._node.get_logger().warn(
-                f"SetEntityState 失败: {getattr(res, 'status_message', '')}"
+                "SetEntityState 失败"
+                + (f": {msg}" if msg else "")
+                + f"{extra} name={st.name!r} target=({st.pose.position.x:.2f},{st.pose.position.y:.2f},{yaw_use:.2f})"
             )
             return False
         return True
@@ -803,6 +907,37 @@ class RlCarGazeboEnv:
         try:
             p = res.state.pose.position
             return float(p.x), float(p.y)
+        except Exception:
+            return None
+
+    def _get_world_xy_yaw_via_get_entity_state(self) -> tuple[float, float, float] | None:
+        """GetEntityState 同时拿 world (x,y,yaw)，用于与 world 内静态 marker 对齐诊断。"""
+        if not self._resolve_get_entity_state_client():
+            return None
+        try:
+            from gazebo_msgs.srv import GetEntityState  # type: ignore[import-untyped]
+        except ImportError:
+            return None
+
+        self._pump(20, 0.02)
+        req = GetEntityState.Request()
+        req.name = str(self.env_cfg.model_name)
+        req.reference_frame = "world"
+        fut = self._get_entity_state_client.call_async(req)
+        rclpy.spin_until_future_complete(self._node, fut, timeout_sec=2.0)
+        res = fut.result()
+        if res is None:
+            return None
+        if hasattr(res, "success") and (not res.success):
+            return None
+        try:
+            p = res.state.pose.position
+            q = res.state.pose.orientation
+            # yaw from quaternion (Z axis)
+            siny_cosp = 2.0 * (float(q.w) * float(q.z) + float(q.x) * float(q.y))
+            cosy_cosp = 1.0 - 2.0 * (float(q.y) * float(q.y) + float(q.z) * float(q.z))
+            yaw = float(np.arctan2(siny_cosp, cosy_cosp))
+            return float(p.x), float(p.y), yaw
         except Exception:
             return None
 
@@ -1010,24 +1145,50 @@ class RlCarGazeboEnv:
         """停车、重置位姿与目标、清空轨迹变量，返回初始 ``state`` 向量。"""
         self._pump(60, 0.02)
         self._node.stop_robot()
+        # road map lazy-load (optional)
+        if self._road_map is None and str(self.env_cfg.road_map_yaml).strip():
+            from obstacle_environment.road import RoadMap
+            self._road_map = RoadMap.load(str(self.env_cfg.road_map_yaml))
+            # allow YAML to override half width
+            try:
+                self.env_cfg.road_half_width_m = float(self._road_map.half_width_m)
+            except Exception:
+                pass
+            try:
+                self._road_s_end = float(self._road_map.s_end)
+            except Exception:
+                self._road_s_end = None
         gx, gy = self._sample_goal_xy()
         yaw_reset: Optional[float] = None
         if self.env_cfg.spawn_yaw_towards_goal:
             yaw_reset = float(
                 math.atan2(gy - float(self.env_cfg.spawn_y), gx - float(self.env_cfg.spawn_x))
             )
-        # 优先 set_model_state；失败时退化到 /reset_world，避免一直从错误姿态继续跑飞
-        ok = self._call_set_model_state(yaw_reset)
-        if not ok:
-            ok = self._call_set_entity_state(yaw_reset)
+        # 优先 set_model_state；失败时退化到 set_entity_state / reset_world，避免一直从错误姿态继续跑飞
+        ok = False
+        reset_via = "none"
+        if self._call_set_model_state(yaw_reset):
+            ok = True
+            reset_via = "set_model_state"
+        elif self._call_set_entity_state(yaw_reset):
+            ok = True
+            reset_via = "set_entity_state"
+
         if (not ok) and (self._reset_world_client is not None):
             try:
                 from std_srvs.srv import Empty  # type: ignore[import-untyped]
 
-                if self._reset_world_client.wait_for_service(timeout_sec=2.0):
+                # 启动早期/并行时服务发现可能滞后：边 pump 边等
+                t0 = time.time()
+                while time.time() - t0 < 5.0:
+                    if self._reset_world_client.wait_for_service(timeout_sec=0.2):
+                        break
+                    self._pump(10, 0.02)
+                if self._reset_world_client.service_is_ready():
                     fut = self._reset_world_client.call_async(Empty.Request())
                     rclpy.spin_until_future_complete(self._node, fut, timeout_sec=3.0)
                     ok = True
+                    reset_via = "reset_world"
             except Exception:
                 pass
         if (not ok) and (not self._set_model_resolve_warned):
@@ -1036,43 +1197,125 @@ class RlCarGazeboEnv:
                 "未发现 set_model_state/set_entity_state，且 /reset_world 不可用；重置将仅发布零速度并继续。"
             )
 
-        self._node.publish_goal(gx, gy)
-
-        # ---- Level1：随机静态障碍（在每个 episode reset 时刷新）----
-        if self._obstacle_mgr is not None and bool(self.env_cfg.enable_level1_static_obstacles):
+        if bool(self.env_cfg.debug_reset):
             try:
-                # 先清理上一轮生成的障碍物（如果 DeleteEntity 可用）
-                self._obstacle_mgr.clear_spawned()
-
-                n_min = int(self.env_cfg.static_obstacle_count_min)
-                n_max = int(self.env_cfg.static_obstacle_count_max)
-                if n_max < n_min:
-                    n_max = n_min
-                n_obs = int(np.random.randint(n_min, n_max + 1))
-
-                samp_cfg = StaticObstacleSamplingConfig(
-                    x_min=float(self.env_cfg.map_x_min),
-                    x_max=float(self.env_cfg.map_x_max),
-                    y_min=float(self.env_cfg.map_y_min),
-                    y_max=float(self.env_cfg.map_y_max),
-                    min_dist_to_robot=float(self.env_cfg.static_obstacle_min_dist_to_robot),
-                    min_dist_to_goal=float(self.env_cfg.static_obstacle_min_dist_to_goal),
-                    min_dist_between_obstacles=float(self.env_cfg.static_obstacle_min_dist_between),
-                )
-                start_xy = (float(self.env_cfg.spawn_x), float(self.env_cfg.spawn_y))
-                goal_xy = (float(gx), float(gy))
-                specs = sample_static_obstacles(
-                    num_obstacles=n_obs,
-                    start_xy=start_xy,
-                    goal_xy=goal_xy,
-                    cfg=samp_cfg,
-                    name_prefix=str(self.env_cfg.static_obstacle_name_prefix),
-                )
-                obstacles = [(s.name, float(s.x), float(s.y), float(s.yaw)) for s in specs]
-                self._obstacle_mgr.spawn_static_boxes(obstacles=obstacles)
+                # 先 pump 一下，让 /odom 追上服务重置后的位姿
+                self._pump(40, 0.02)
+                obs0 = self._node.build_observation()
+                pos0 = self._extract_position_xy_from_obs(obs0)
+                if pos0 is not None:
+                    dx = float(pos0[0]) - float(self.env_cfg.spawn_x)
+                    dy = float(pos0[1]) - float(self.env_cfg.spawn_y)
+                    dist = float(np.hypot(dx, dy))
+                    self._node.get_logger().info(
+                        f"[debug_reset] via={reset_via} ok={ok} "
+                        f"odom_xy=({pos0[0]:.3f},{pos0[1]:.3f}) "
+                        f"spawn_xy=({float(self.env_cfg.spawn_x):.3f},{float(self.env_cfg.spawn_y):.3f}) "
+                        f"err={dist:.3f}m"
+                    )
+                else:
+                    self._node.get_logger().info(f"[debug_reset] via={reset_via} ok={ok} odom_xy=(none)")
             except Exception as e:
                 try:
-                    self._node.get_logger().warn(f"静态障碍刷新失败（将继续训练，不影响 reset）：{e}")
+                    self._node.get_logger().warn(f"[debug_reset] failed: {e}")
+                except Exception:
+                    pass
+
+        self._node.publish_goal(gx, gy)
+
+        # ---- 静态 + 动态障碍（每个 episode reset）----
+        self._dynamic_specs = []
+        self._dynamic_episode_t = 0.0
+        if self._obstacle_mgr is not None:
+            try:
+                self._obstacle_mgr.clear_spawned()
+
+                st_mode = str(self.env_cfg.static_obstacle_mode).strip().lower()
+                if bool(self.env_cfg.enable_level1_static_obstacles) and st_mode in ("", "none"):
+                    st_mode = "random"
+
+                if st_mode == "random":
+                    n_min = int(self.env_cfg.static_obstacle_count_min)
+                    n_max = int(self.env_cfg.static_obstacle_count_max)
+                    if n_max < n_min:
+                        n_max = n_min
+                    n_obs = int(np.random.randint(n_min, n_max + 1))
+                    samp_cfg = StaticObstacleSamplingConfig(
+                        x_min=float(self.env_cfg.map_x_min),
+                        x_max=float(self.env_cfg.map_x_max),
+                        y_min=float(self.env_cfg.map_y_min),
+                        y_max=float(self.env_cfg.map_y_max),
+                        min_dist_to_robot=float(self.env_cfg.static_obstacle_min_dist_to_robot),
+                        min_dist_to_goal=float(self.env_cfg.static_obstacle_min_dist_to_goal),
+                        min_dist_between_obstacles=float(self.env_cfg.static_obstacle_min_dist_between),
+                    )
+                    start_xy = (float(self.env_cfg.spawn_x), float(self.env_cfg.spawn_y))
+                    goal_xy = (float(gx), float(gy))
+                    specs = sample_static_obstacles(
+                        num_obstacles=n_obs,
+                        start_xy=start_xy,
+                        goal_xy=goal_xy,
+                        cfg=samp_cfg,
+                        name_prefix=str(self.env_cfg.static_obstacle_name_prefix),
+                    )
+                    obstacles = [(s.name, float(s.x), float(s.y), float(s.yaw)) for s in specs]
+                    self._obstacle_mgr.spawn_static_boxes(obstacles=obstacles)
+                elif st_mode == "fixed":
+                    px = str(self.env_cfg.static_obstacle_name_prefix)
+                    fix = list(self.env_cfg.fixed_static_obstacles_xyyaw)
+                    if not fix:
+                        # 跨进程运行 eval/train 时，上一轮进程生成的固定障碍可能仍残留在 Gazebo 中。
+                        # clear_spawned() 只清理当前进程记录的名字，因此这里额外按约定命名做一次“尽力删除”，避免一开局就撞。
+                        try:
+                            self._obstacle_mgr.delete_entities(
+                                names=[f"{px}_l1_{i:02d}" for i in range(9)]
+                            )
+                        except Exception:
+                            pass
+                        self._obstacle_mgr.spawn_mixed_static(
+                            specs=builtin_level1_fixed_mixed_3x3(name_prefix=f"{px}_l1"),
+                        )
+                    else:
+                        obstacles = [
+                            (f"{px}_fixed_{i}", float(x), float(y), float(yaw))
+                            for i, (x, y, yaw) in enumerate(fix)
+                        ]
+                        self._obstacle_mgr.spawn_static_boxes(obstacles=obstacles)
+
+                dyn_mode = str(self.env_cfg.dynamic_obstacle_mode).strip().lower()
+                if dyn_mode == "fixed":
+                    self._dynamic_specs = list(
+                        builtin_fixed_dynamic_specs(
+                            name_prefix=str(self.env_cfg.dynamic_obstacle_name_prefix)
+                        )
+                    )
+                elif dyn_mode == "random" and int(self.env_cfg.dynamic_obstacle_count_max) > 0:
+                    n_min = int(self.env_cfg.dynamic_obstacle_count_min)
+                    n_max = int(self.env_cfg.dynamic_obstacle_count_max)
+                    if n_max < n_min:
+                        n_max = n_min
+                    n_dyn = int(np.random.randint(n_min, n_max + 1))
+                    import random as _pyr
+
+                    rng = _pyr.Random(int(self._episode_idx) * 1013 + 31)
+                    self._dynamic_specs = sample_random_dynamic_specs(
+                        rng,
+                        count=n_dyn,
+                        map_x_min=float(self.env_cfg.map_x_min),
+                        map_x_max=float(self.env_cfg.map_x_max),
+                        map_y_min=float(self.env_cfg.map_y_min),
+                        map_y_max=float(self.env_cfg.map_y_max),
+                        start_xy=(float(self.env_cfg.spawn_x), float(self.env_cfg.spawn_y)),
+                        goal_xy=(float(gx), float(gy)),
+                        name_prefix=str(self.env_cfg.dynamic_obstacle_name_prefix),
+                    )
+
+                if self._dynamic_specs:
+                    dyn_boxes = [(s.name, *pose_at_time(s, 0.0)) for s in self._dynamic_specs]
+                    self._obstacle_mgr.spawn_static_boxes(obstacles=dyn_boxes)
+            except Exception as e:
+                try:
+                    self._node.get_logger().warn(f"障碍刷新失败（将继续训练，不影响 reset）：{e}")
                 except Exception:
                     pass
 
@@ -1082,18 +1325,66 @@ class RlCarGazeboEnv:
         self._step_idx = 0
         self._goal_reached_for_bonus = False
         self._prev_action = None
+        self._collision_stuck_steps = 0
+        self._stuck_pos_steps = 0
+        self._prev_road_s = None
+        # keep _road_s_end across episodes
         self._episode_idx += 1
 
         time.sleep(self.env_cfg.reset_settle_time)
         self._wait_ready()
 
-        obs = self._node.build_observation()
+        base = self._node.build_observation()
+        road_data = self._compute_road_data(base)
+        obs = self._node.build_observation(road_data=road_data)
         self._prev_goal_distance = float(obs["goal_distance"])
         self._prev_pos_xy = self._extract_position_xy_from_obs(obs)
+        if self._road_map is not None and isinstance(obs.get("road"), dict):
+            try:
+                self._prev_road_s = float(obs["road"].get("s", 0.0))
+            except Exception:
+                self._prev_road_s = None
         lr0 = self._node.get_lidar_ranges()
         if lr0.size > 0:
             self._last_lidar_front_min = float(self._compute_front_lidar_min(lr0))
         return obs["state"].astype(np.float32, copy=False)
+
+    def _yaw_from_odom(self, odom: Any) -> float:
+        try:
+            q = odom.pose.pose.orientation
+            x, y, z, w = float(q.x), float(q.y), float(q.z), float(q.w)
+            siny_cosp = 2.0 * (w * z + x * y)
+            cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+            return float(math.atan2(siny_cosp, cosy_cosp))
+        except Exception:
+            return 0.0
+
+    def _compute_road_data(self, obs: dict[str, Any]) -> dict[str, Any]:
+        if self._road_map is None:
+            return {}
+        pos = self._extract_position_xy_from_obs(obs)
+        odom = obs.get("odom")
+        if pos is None or odom is None:
+            return {}
+        yaw = self._yaw_from_odom(odom)
+        s, cte, tan_yaw = self._road_map.project(xy=pos)
+        he = float(self._road_map.heading_error(ego_yaw=yaw, tangent_yaw=tan_yaw))
+        la = self._road_map.lookahead_points(
+            s=s,
+            n=int(self.env_cfg.road_lookahead_n),
+            ds=float(self.env_cfg.road_lookahead_ds),
+        )
+        la_body = self._road_map.road_feat_to_body_frame(ego_xy=pos, ego_yaw=yaw, points_xy=la)
+        hw = float(self.env_cfg.road_half_width_m)
+        margin = float(self.env_cfg.road_out_margin_m)
+        in_road = abs(float(cte)) <= max(0.0, hw - margin)
+        return {
+            "s": float(s),
+            "cte": float(cte),
+            "heading_error": float(he),
+            "in_road": bool(in_road),
+            "lookahead_xy": la_body.astype(np.float32, copy=False),
+        }
 
     def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, dict[str, Any]]:
         """
@@ -1121,9 +1412,16 @@ class RlCarGazeboEnv:
         self._node.publish_cmd_vel(float(cmd[0]), float(cmd[1]))
 
         time.sleep(self.env_cfg.control_dt)
+        if self._obstacle_mgr is not None and self._dynamic_specs:
+            self._dynamic_episode_t += float(self.env_cfg.control_dt)
+            for sp in self._dynamic_specs:
+                x, y, yaw = pose_at_time(sp, self._dynamic_episode_t)
+                self._obstacle_mgr.set_entity_pose(name=sp.name, x=x, y=y, yaw=yaw)
         self._pump(20, 0.02)
 
-        obs = self._node.build_observation()
+        base = self._node.build_observation()
+        road_data = self._compute_road_data(base)
+        obs = self._node.build_observation(road_data=road_data)
         state = obs["state"].astype(np.float32, copy=False)
         lidar_ranges = self._node.get_lidar_ranges()
         gd = float(obs["goal_distance"])
@@ -1152,21 +1450,113 @@ class RlCarGazeboEnv:
         pos_xy = self._extract_position_xy_from_obs(obs)
         oob_xy = self._position_xy_for_oob(obs)
         out_of_bounds = self._is_out_of_bounds(oob_xy)
+        wpose_step: tuple[float, float, float] | None = None
+        world_goal_d: float | None = None
+        try:
+            wpose_step = self._get_world_xy_yaw_via_get_entity_state()
+            if wpose_step is not None:
+                wx_s, wy_s, _ = wpose_step
+                world_goal_d = float(
+                    np.hypot(float(self.env_cfg.goal_x) - float(wx_s), float(self.env_cfg.goal_y) - float(wy_s))
+                )
+        except Exception:
+            pass
         terminated = False
         terminal_reason: Optional[str] = None
+        success_via: str = ""
+        # 碰撞判定（分层，避免「侧身已过障碍、侧向射线仍 0.30m」却用全向宽阈值误 reset）：
+        # - lidar_strict：原逻辑（与奖励 collision_distance 一致）
+        # - global_small：全向 min ≤ cd + collision_done_global_small_margin_m（约 0.25m 级，刮擦仍判）
+        # - front_relaxed：仅前向 d_front ≤ cd + collision_done_extra_margin_m（约 0.33m，兜底盘/激光装位）
+        # - stuck：里程计卡死兜底
+        collision_via = ""
+        if self.env_cfg.done_on_collision:
+            cd = float(rcfg.collision_distance)
+            m_front = max(0.0, float(self.env_cfg.collision_done_extra_margin_m))
+            m_glob = max(0.0, float(self.env_cfg.collision_done_global_small_margin_m))
+            cd_front_done = cd + m_front
+            cd_global_done = cd + m_glob
+            close_ns = _finite_non_saturating(lidar_ranges, range_max=lidar_rm)
+            global_small = close_ns.size > 0 and float(np.min(close_ns)) <= cd_global_done + 1e-4
+            front_relaxed = float(d_front) <= cd_front_done + 1e-4
+            lidar_strict = lidar_ok_for_collision and dmin <= cd + 1e-4
+            contact_lidar = lidar_strict or global_small or front_relaxed
+
+            stuck_phys = False
+            if bool(self.env_cfg.done_on_cmd_velocity_stuck):
+                cmd_lin = abs(float(cmd[0]))
+                odom_lin = abs(float(obs.get("linear_x", 0.0)))
+                near_obs = float(dmin) <= float(self.env_cfg.stuck_lidar_max_m)
+                if (
+                    cmd_lin >= float(self.env_cfg.stuck_cmd_linear_min)
+                    and odom_lin <= float(self.env_cfg.stuck_odom_linear_max)
+                    and near_obs
+                ):
+                    self._collision_stuck_steps += 1
+                else:
+                    self._collision_stuck_steps = 0
+                need = max(1, int(self.env_cfg.stuck_consecutive_steps))
+                if self._collision_stuck_steps >= need:
+                    stuck_phys = True
+                    self._collision_stuck_steps = 0
+
+                # 位置几乎不动兜底：不依赖 near_obs（路沿石较低时雷达未必“很近”）
+                if (not stuck_phys) and (pos_xy is not None) and (self._prev_pos_xy is not None):
+                    disp = float(np.hypot(float(pos_xy[0] - self._prev_pos_xy[0]), float(pos_xy[1] - self._prev_pos_xy[1])))
+                    if cmd_lin >= float(self.env_cfg.stuck_cmd_linear_min) and disp <= float(self.env_cfg.stuck_pos_eps_m):
+                        self._stuck_pos_steps += 1
+                    else:
+                        self._stuck_pos_steps = 0
+                    need2 = max(1, int(self.env_cfg.stuck_pos_consecutive_steps))
+                    if self._stuck_pos_steps >= need2:
+                        stuck_phys = True
+                        self._stuck_pos_steps = 0
+
+            if contact_lidar or stuck_phys:
+                terminated = True
+                terminal_reason = "collision"
+                collision_via = "lidar" if contact_lidar else ("stuck" if stuck_phys else "")
         if (
-            self.env_cfg.done_on_collision
-            and lidar_ok_for_collision
-            and dmin <= rcfg.collision_distance
+            (not terminated)
+            and bool(self.env_cfg.done_on_world_goal)
+            and world_goal_d is not None
+            and world_goal_d <= float(self.env_cfg.world_goal_success_radius_m)
         ):
             terminated = True
-            terminal_reason = "collision"
+            terminal_reason = "success"
+            success_via = "world_goal_marker"
         if (not terminated) and self.env_cfg.done_on_goal and gd <= rcfg.goal_reached_distance:
             terminated = True
             terminal_reason = "success"
+            success_via = "goal_distance"
+        # 道路任务：按中心线进度到达终点（避免终点附近“慢慢停下→truncated”）
+        if (
+            (not terminated)
+            and bool(self.env_cfg.done_on_road_end)
+            and isinstance(obs.get("road"), dict)
+            and (self._road_s_end is not None)
+        ):
+            try:
+                s_now = float(obs["road"].get("s", 0.0))
+                if s_now >= float(self._road_s_end) - float(self.env_cfg.road_success_s_margin_m):
+                    terminated = True
+                    terminal_reason = "success"
+                    success_via = "road_end"
+            except Exception:
+                pass
         if (not terminated) and self.env_cfg.done_on_out_of_bounds and out_of_bounds:
             terminated = True
             terminal_reason = "out_of_bounds"
+
+        # 道路任务：离开路面直接终止（可选）
+        if (
+            (not terminated)
+            and bool(self.env_cfg.done_on_out_of_road)
+            and isinstance(obs.get("road"), dict)
+            and (not bool(obs["road"].get("in_road", True)))
+        ):
+            terminated = True
+            terminal_reason = "out_of_road"
 
         gx, gy = self._goal_xy_from_obs(obs)
         rb = compute_reward(
@@ -1186,12 +1576,22 @@ class RlCarGazeboEnv:
             prev_action=self._prev_action,
             config=rcfg,
             terminal=terminal_reason,
+            road_s=float(obs.get("road", {}).get("s", 0.0)) if isinstance(obs.get("road"), dict) else None,
+            prev_road_s=float(self._prev_road_s) if self._prev_road_s is not None else None,
+            road_cte=float(obs.get("road", {}).get("cte", 0.0)) if isinstance(obs.get("road"), dict) else None,
+            road_heading_error=float(obs.get("road", {}).get("heading_error", 0.0)) if isinstance(obs.get("road"), dict) else None,
+            in_road=bool(obs.get("road", {}).get("in_road", True)) if isinstance(obs.get("road"), dict) else None,
         )
 
         self._prev_action = cmd.astype(np.float32, copy=False)
         self._prev_goal_distance = gd
         if pos_xy is not None:
             self._prev_pos_xy = pos_xy
+        if isinstance(obs.get("road"), dict):
+            try:
+                self._prev_road_s = float(obs["road"].get("s", 0.0))
+            except Exception:
+                pass
         self._step_idx += 1
 
         truncated = self._step_idx >= self.env_cfg.max_episode_steps
@@ -1206,10 +1606,33 @@ class RlCarGazeboEnv:
             "lidar_ok_for_collision": bool(lidar_ok_for_collision),
             "goal_distance": gd,
             "position_xy": pos_xy,
+            "linear_x_odom": float(obs.get("linear_x", 0.0)),
+            "angular_z_odom": float(obs.get("angular_z", 0.0)),
             "oob_position_xy": oob_xy,
             "out_of_bounds": out_of_bounds,
             "terminal_reason": terminal_reason or "",
+            "success_via": success_via,
+            "collision_via": collision_via,
         }
+        if isinstance(obs.get("road"), dict):
+            try:
+                info["road_s"] = float(obs["road"].get("s", 0.0))
+                info["road_cte"] = float(obs["road"].get("cte", 0.0))
+                info["in_road"] = bool(obs["road"].get("in_road", True))
+            except Exception:
+                pass
+        # world 对齐诊断：与 Gazebo world 内的 marker(绿/红圆柱)坐标一致（与 step 内 success 共用一次查询）
+        if wpose_step is not None:
+            wx, wy, wyaw = wpose_step
+            info["world_position_xy"] = (float(wx), float(wy))
+            info["world_yaw"] = float(wyaw)
+            gx_w = float(self.env_cfg.goal_x)
+            gy_w = float(self.env_cfg.goal_y)
+            info["world_goal_xy"] = (gx_w, gy_w)
+            if world_goal_d is not None:
+                info["world_goal_distance"] = float(world_goal_d)
+            else:
+                info["world_goal_distance"] = float(np.hypot(gx_w - float(wx), gy_w - float(wy)))
 
         # ---- 写 step 日志（可选）----
         if self._step_log_writer is not None and self._step_log_f is not None:
@@ -1273,6 +1696,11 @@ class RlCarGazeboEnv:
 
     def close(self) -> None:
         self._node.stop_robot()
+        if self._obstacle_mgr is not None:
+            try:
+                self._obstacle_mgr.clear_spawned()
+            except Exception:
+                pass
         if self._step_log_f is not None:
             try:
                 self._step_log_f.flush()
